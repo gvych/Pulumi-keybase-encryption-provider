@@ -4,6 +4,24 @@ This directory contains example programs demonstrating how to use the Keybase en
 
 ## Running the Examples
 
+### API Client Example
+
+Demonstrates the Keybase API client wrapper:
+
+```bash
+cd examples/api
+go run main.go
+```
+
+This example shows:
+- Creating API client with default and custom configuration
+- Username validation
+- Fetching public keys from Keybase API
+- Batch user lookup (multiple users in single request)
+- Error handling with APIError types
+- Context usage for cancellation and timeouts
+- Best practices for API usage
+
 ### Basic Usage Example
 
 Demonstrates core cache operations with mock data:
