@@ -28,9 +28,11 @@ config:
 
 ### Technical Documentation
 - **[URL Scheme Specification](keybase/URL_PARSING.md)** - URL format and parsing details
+- **[Armoring Strategy](ARMORING_STRATEGY.md)** - Encryption format decision (ASCII vs binary)
 - **[Cache Manager API](keybase/cache/README.md)** - Public key caching implementation
 - **[API Client](keybase/api/README.md)** - Keybase API integration
 - **[Credentials](keybase/credentials/README.md)** - Credential discovery
+- **[Crypto Package](keybase/crypto/README.md)** - Saltpack encryption/decryption API
 
 ### Examples
 - **[Code Examples](examples/)** - Working Go code examples
@@ -516,9 +518,11 @@ This project follows Pulumi's licensing terms.
 
 ### Technical References
 - **[URL Scheme](keybase/URL_PARSING.md)** - URL format specification
+- **[Armoring Strategy](ARMORING_STRATEGY.md)** - Encryption format decision
 - **[Cache Manager](keybase/cache/README.md)** - Cache API reference
 - **[API Client](keybase/api/README.md)** - Keybase API integration
 - **[Credentials](keybase/credentials/README.md)** - Credential discovery
+- **[Crypto Package](keybase/crypto/README.md)** - Saltpack encryption/decryption
 
 ### Examples
 - **[Pulumi Configurations](examples/pulumi_configs/)** - Complete stack examples

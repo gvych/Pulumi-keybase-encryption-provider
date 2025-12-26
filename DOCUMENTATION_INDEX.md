@@ -62,6 +62,7 @@ This project includes comprehensive documentation covering setup, configuration,
 | Document | Description | Details |
 |----------|-------------|---------|
 | **[URL Scheme](keybase/URL_PARSING.md)** | URL format spec | Parsing, validation, examples |
+| **[Armoring Strategy](ARMORING_STRATEGY.md)** | Encryption format decision | ASCII vs binary, Base62 encoding |
 
 ## 📂 Documentation by Topic
 
@@ -269,7 +270,7 @@ This project includes comprehensive documentation covering setup, configuration,
 
 ### Technical Documentation
 - **API References:** 3 complete references
-- **Specifications:** 1 URL scheme spec
+- **Specifications:** 2 complete specs (URL scheme, Armoring strategy)
 - **Architecture Docs:** Integrated in main README
 
 ### Examples
@@ -278,9 +279,9 @@ This project includes comprehensive documentation covering setup, configuration,
 - **Integration Examples:** CI/CD for 3 platforms
 
 ### Total Documentation
-- **Total Files:** 20+ documentation files
+- **Total Files:** 21+ documentation files
 - **Total Examples:** 13+ complete examples
-- **Total Words:** 50,000+ words of documentation
+- **Total Words:** 55,000+ words of documentation
 
 ## 🔗 Quick Navigation
 
@@ -322,6 +323,7 @@ Found an issue or have a suggestion?
 ├── DOCUMENTATION_INDEX.md             # This file
 ├── PULUMI_CONFIGURATION.md            # Complete Pulumi setup
 ├── ENVIRONMENT_VARIABLES.md           # Environment variable reference
+├── ARMORING_STRATEGY.md               # Encryption format decision
 │
 ├── keybase/
 │   ├── URL_PARSING.md                 # URL scheme specification

@@ -2,6 +2,21 @@
 
 The `crypto` package provides Saltpack encryption and decryption functionality for the Pulumi Keybase encryption provider. It implements modern public-key encryption with support for multiple recipients.
 
+## Armoring Strategy
+
+**This package uses ASCII-armored Base62 encoding for Pulumi state files.**
+
+### Why ASCII Armoring?
+
+✅ **Git-friendly**: Line-based diffs instead of "binary files differ"  
+✅ **Debuggable**: Clear BEGIN/END markers for visual inspection  
+✅ **Cross-platform**: No encoding issues or line ending conflicts  
+✅ **Industry standard**: Aligns with PGP, SSH, TLS conventions  
+
+**Trade-offs**: 33% size overhead (~300 bytes per 1 KB secret), acceptable for small secrets in state files.
+
+📖 **See [ARMORING_STRATEGY.md](../../ARMORING_STRATEGY.md) for complete decision rationale, benchmarks, and format comparison.**
+
 ## Overview
 
 This package wraps the `github.com/keybase/saltpack` library to provide:
@@ -70,17 +85,28 @@ ciphertext, err := encryptor.Encrypt(plaintext, recipients)
 
 Each recipient can independently decrypt the message with their private key.
 
-### ASCII-Armored Encryption
+### ASCII-Armored Encryption (Recommended for Pulumi)
 
 For storage in text files (like Pulumi state files):
 
 ```go
-// Encrypt with ASCII armoring
+// Encrypt with ASCII armoring (Base62 encoding)
+// Produces human-readable, git-friendly output
 armoredCiphertext, err := encryptor.EncryptArmored(plaintext, recipients)
 
 // Decrypt armored ciphertext
 plaintext, info, err := decryptor.DecryptArmored(armoredCiphertext)
 ```
+
+**Output format:**
+```
+BEGIN KEYBASE SALTPACK ENCRYPTED MESSAGE.
+kiPgBwdlv5J3sZ7 qNhGGXwhVyE8XTp MPWDxEu0C4OKjmc
+rCjQZBxShqhN7g7 o9Vc5xOQJgBPWvj XKZRyiuRn6vFZJC
+END KEYBASE SALTPACK ENCRYPTED MESSAGE.
+```
+
+See [ARMORING_STRATEGY.md](../../ARMORING_STRATEGY.md) for rationale and format details.
 
 ### Streaming for Large Files
 
