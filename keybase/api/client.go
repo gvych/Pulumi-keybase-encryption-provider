@@ -56,14 +56,36 @@ func NewClient(config *ClientConfig) *Client {
 	if config == nil {
 		config = DefaultClientConfig()
 	}
+
+	baseURL := config.BaseURL
+	if baseURL == "" {
+		baseURL = DefaultAPIEndpoint
+	}
+
+	timeout := config.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+
+	maxRetries := config.MaxRetries
+	if maxRetries < 0 {
+		// Negative values would skip the retry loop entirely, leading to a nil
+		// response and potential nil dereference later.
+		maxRetries = 0
+	}
+
+	retryDelay := config.RetryDelay
+	if retryDelay <= 0 {
+		retryDelay = DefaultRetryDelay
+	}
 	
 	return &Client{
-		BaseURL: config.BaseURL,
+		BaseURL: baseURL,
 		HTTPClient: &http.Client{
-			Timeout: config.Timeout,
+			Timeout: timeout,
 		},
-		MaxRetries: config.MaxRetries,
-		RetryDelay: config.RetryDelay,
+		MaxRetries: maxRetries,
+		RetryDelay: retryDelay,
 	}
 }
 
@@ -126,6 +148,9 @@ func (c *Client) LookupUsers(ctx context.Context, usernames []string) ([]UserPub
 	if err != nil {
 		return nil, err
 	}
+	if response == nil {
+		return nil, fmt.Errorf("lookup succeeded but response was nil")
+	}
 	
 	// Parse response
 	return c.parseResponse(response, usernames)
@@ -177,6 +202,9 @@ func (c *Client) doLookup(ctx context.Context, url string) (*LookupResponse, err
 
 // parseResponse extracts public keys from the API response
 func (c *Client) parseResponse(response *LookupResponse, requestedUsers []string) ([]UserPublicKey, error) {
+	if response == nil {
+		return nil, fmt.Errorf("nil response")
+	}
 	if len(response.Them) == 0 {
 		return nil, fmt.Errorf("no users found in response")
 	}

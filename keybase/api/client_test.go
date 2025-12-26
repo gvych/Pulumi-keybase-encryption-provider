@@ -32,6 +32,20 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
+func TestNewClientNegativeMaxRetriesClamped(t *testing.T) {
+	config := &ClientConfig{
+		BaseURL:    "https://test.keybase.io",
+		Timeout:    10 * time.Second,
+		MaxRetries: -1,
+		RetryDelay: 2 * time.Second,
+	}
+
+	client := NewClient(config)
+	if client.MaxRetries != 0 {
+		t.Errorf("MaxRetries = %v, want %v", client.MaxRetries, 0)
+	}
+}
+
 func TestDefaultClientConfig(t *testing.T) {
 	config := DefaultClientConfig()
 	
@@ -168,6 +182,57 @@ func TestLookupUsersSuccess(t *testing.T) {
 	
 	if keys[1].Username != "bob" {
 		t.Errorf("keys[1].Username = %v, want bob", keys[1].Username)
+	}
+}
+
+func TestLookupUsersNegativeMaxRetriesDoesNotSkipRequest(t *testing.T) {
+	// This test guards against the bug where MaxRetries < 0 skips the retry loop
+	// entirely, leaving (response, err) as (nil, nil) and causing a nil deref.
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		response := LookupResponse{
+			Status: Status{
+				Code: 0,
+				Name: "OK",
+			},
+			Them: []User{
+				{
+					Basics: Basics{
+						Username: "alice",
+					},
+					PublicKeys: PublicKeys{
+						Primary: PrimaryKey{
+							KID:    "test_kid_alice",
+							Bundle: "test_bundle_alice",
+						},
+					},
+				},
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	config := &ClientConfig{
+		BaseURL:    server.URL,
+		Timeout:    5 * time.Second,
+		MaxRetries: -1,
+		RetryDelay: 1 * time.Millisecond,
+	}
+
+	client := NewClient(config)
+	keys, err := client.LookupUsers(context.Background(), []string{"alice"})
+	if err != nil {
+		t.Fatalf("LookupUsers() error = %v", err)
+	}
+	if len(keys) != 1 || keys[0].Username != "alice" {
+		t.Fatalf("LookupUsers() returned %+v, want alice", keys)
+	}
+	if requests != 1 {
+		t.Fatalf("server requests = %d, want 1", requests)
 	}
 }
 
