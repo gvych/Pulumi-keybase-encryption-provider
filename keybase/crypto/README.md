@@ -125,6 +125,63 @@ func main() {
 }
 ```
 
+### Using Keyring Loader with Caching
+
+The `KeyringLoader` provides automatic keyring loading with TTL-based caching:
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+    "time"
+    
+    "github.com/pulumi/pulumi-keybase-encryption/keybase/crypto"
+)
+
+func main() {
+    // Create keyring loader with 30-minute cache
+    loader, err := crypto.NewKeyringLoader(&crypto.KeyringLoaderConfig{
+        TTL: 30 * time.Minute,
+    })
+    if err != nil {
+        log.Fatalf("Failed to create keyring loader: %v", err)
+    }
+    
+    // Load keyring for current user (auto-detected)
+    keyring, err := loader.LoadKeyring()
+    if err != nil {
+        log.Fatalf("Failed to load keyring: %v", err)
+    }
+    
+    // Or load keyring for specific user
+    aliceKeyring, err := loader.LoadKeyringForUser("alice")
+    if err != nil {
+        log.Fatalf("Failed to load keyring for alice: %v", err)
+    }
+    
+    // Use the keyring for decryption
+    decryptor, _ := crypto.NewDecryptor(&crypto.DecryptorConfig{
+        Keyring: keyring,
+    })
+    
+    // Cache statistics
+    stats := loader.GetCacheStats()
+    fmt.Printf("Cached keys: %d (valid: %d, expired: %d)\n", 
+        stats.TotalCached, stats.ValidCount, stats.ExpiredCount)
+}
+```
+
+**Key Features:**
+- ✅ Automatic loading from `~/.config/keybase/` (or platform equivalent)
+- ✅ In-memory TTL-based caching (default: 1 hour)
+- ✅ Thread-safe concurrent access
+- ✅ Manual cache invalidation support
+- ✅ Cross-platform support (Linux, macOS, Windows)
+
+**See [KEYRING_LOADING.md](./KEYRING_LOADING.md) for complete documentation.**
+
 ### Multiple Recipients
 
 ```go
