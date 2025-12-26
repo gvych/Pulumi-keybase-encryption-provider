@@ -1,0 +1,45 @@
+# Production Stack Configuration
+#
+# This stack uses Keybase encryption with strict security settings
+# including identity verification for all recipients.
+
+config:
+  # Keybase secrets provider configuration
+  # Recipients: operations team + security team + platform engineers
+  # Format: Saltpack (modern, recommended)
+  # Cache TTL: 24 hours (86400 seconds) for stability
+  # Verify Proofs: Enabled for additional security
+  pulumi:secretsprovider: keybase://alice_ops,bob_security,charlie_platform,dave_sre?format=saltpack&cache_ttl=86400&verify_proofs=true
+  
+  # AWS Configuration
+  aws:region: us-east-1
+  
+  # Application Configuration
+  myapp:environment: production
+  myapp:debugMode: "false"
+  myapp:logLevel: warn
+  myapp:enableMetrics: "true"
+  myapp:enableTracing: "true"
+  
+  # Database Configuration
+  myapp:databaseHost: prod-db.example.com
+  myapp:databasePort: "5432"
+  myapp:databaseName: production
+  
+  # Secrets (encrypted with Keybase provider)
+  # All secrets are encrypted for the configured recipients
+  # Only team members with valid Keybase credentials can decrypt
+  myapp:databasePassword:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
+  
+  myapp:apiKey:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
+  
+  myapp:jwtSecret:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
+  
+  myapp:encryptionKey:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
+  
+  myapp:awsAccessKeySecret:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...

@@ -1,0 +1,26 @@
+# Development Stack Configuration
+# 
+# This stack uses Keybase encryption with a short cache TTL
+# for faster iteration during development.
+
+config:
+  # Keybase secrets provider configuration
+  # Recipients: development team members
+  # Cache TTL: 1 hour (3600 seconds) for frequent key updates
+  pulumi:secretsprovider: keybase://alice_dev,bob_dev?cache_ttl=3600
+  
+  # AWS Configuration
+  aws:region: us-west-2
+  
+  # Application Configuration
+  myapp:environment: development
+  myapp:debugMode: "true"
+  myapp:logLevel: debug
+  
+  # Secrets (encrypted with Keybase provider)
+  # These are example encrypted values - replace with your actual secrets
+  myapp:databasePassword:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
+  
+  myapp:apiKey:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...

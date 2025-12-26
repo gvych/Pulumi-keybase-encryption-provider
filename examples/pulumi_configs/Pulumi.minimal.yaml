@@ -1,0 +1,7 @@
+# Minimal Configuration
+#
+# Absolute minimal configuration with just the secrets provider.
+# All other settings use defaults.
+
+config:
+  pulumi:secretsprovider: keybase://alice,bob

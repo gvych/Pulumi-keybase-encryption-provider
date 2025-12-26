@@ -1,0 +1,20 @@
+# Legacy PGP Configuration
+#
+# This configuration uses PGP encryption format instead of Saltpack.
+# Only use if you need compatibility with legacy systems.
+
+config:
+  # Keybase secrets provider with PGP format
+  # Note: Saltpack is recommended for new projects
+  pulumi:secretsprovider: keybase://alice,bob,charlie?format=pgp&cache_ttl=86400
+  
+  # AWS Configuration
+  aws:region: us-west-2
+  
+  # Application Configuration
+  myapp:environment: legacy
+  myapp:note: Using PGP format for compatibility
+  
+  # Secrets
+  myapp:legacyApiKey:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...

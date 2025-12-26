@@ -1,0 +1,19 @@
+# Single User Configuration
+#
+# This is the simplest configuration for individual developers
+# working on personal projects or prototypes.
+
+config:
+  # Keybase secrets provider - single recipient (yourself)
+  # Uses all default settings (saltpack format, 24h cache)
+  pulumi:secretsprovider: keybase://alice
+  
+  # AWS Configuration
+  aws:region: us-west-2
+  
+  # Application Configuration
+  myapp:environment: personal
+  
+  # Secrets
+  myapp:apiKey:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
