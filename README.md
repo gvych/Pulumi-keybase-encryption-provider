@@ -488,12 +488,14 @@ The implementation provides detailed error messages for:
 - Registration with Go CDK
 - Stack configuration support
 
-### Phase 4: Advanced Features (Future)
+### Phase 4: Advanced Features
 
-- Key rotation detection
-- Identity proof verification
-- Streaming encryption for large files
-- Cross-platform keyring support
+- **Key rotation support** ✅ (Completed)
+  - Automatic detection of retired keys
+  - Lazy re-encryption workflow
+  - Bulk migration tools
+- Identity proof verification (Future)
+- Cross-platform keyring support (Future)
 
 ## Contributing
 
@@ -515,6 +517,7 @@ This project follows Pulumi's licensing terms.
 - **[Quick Start Guide](QUICKSTART.md)** - 5-minute setup guide
 - **[Pulumi Configuration](PULUMI_CONFIGURATION.md)** - Complete Pulumi setup
 - **[Environment Variables](ENVIRONMENT_VARIABLES.md)** - Environment configuration
+- **[Key Rotation Guide](keybase/KEY_ROTATION.md)** - Key rotation and migration ⭐
 
 ### Technical References
 - **[URL Scheme](keybase/URL_PARSING.md)** - URL format specification
@@ -523,6 +526,7 @@ This project follows Pulumi's licensing terms.
 - **[API Client](keybase/api/README.md)** - Keybase API integration
 - **[Credentials](keybase/credentials/README.md)** - Credential discovery
 - **[Crypto Package](keybase/crypto/README.md)** - Saltpack encryption/decryption
+- **[Key Rotation](keybase/KEY_ROTATION.md)** - Key rotation and lazy re-encryption
 
 ### Examples
 - **[Pulumi Configurations](examples/pulumi_configs/)** - Complete stack examples
