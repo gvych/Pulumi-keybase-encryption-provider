@@ -6,12 +6,20 @@ A Keybase encryption provider for Pulumi's Go Cloud Development Kit, enabling se
 
 This provider implements Pulumi's `driver.Keeper` interface to encrypt and decrypt secrets using Keybase's public key infrastructure. It supports multiple recipients, automatic public key caching, and modern cryptography through the Saltpack format.
 
-## Phase 1: Public Key Caching (Current Implementation)
+## Phase 1: Public Key Caching & Credential Discovery (Current Implementation)
 
-Phase 1 implements the foundational public key caching infrastructure with the following components:
+Phase 1 implements the foundational public key caching infrastructure and credential discovery with the following components:
 
 ### Features
 
+#### Credential Discovery
+- **Keybase CLI Detection**: Automatically detects if Keybase is installed and in PATH
+- **Login Status Verification**: Verifies if a Keybase user is logged in
+- **Cross-Platform Support**: Works on Linux, macOS, and Windows
+- **Clear Error Messages**: Provides actionable guidance when Keybase is not available
+- **Configuration Directory Discovery**: Locates Keybase config directory automatically
+
+#### Public Key Caching
 - **TTL-Based Caching**: 24-hour default cache TTL with configurable expiration
 - **JSON Cache Format**: Human-readable cache file with timestamps
 - **Separate Cache Entries**: Individual cache entry for each Keybase username
@@ -69,7 +77,37 @@ go get github.com/pulumi/pulumi-keybase-encryption
 
 ## Usage
 
-### Basic Example
+### Credential Discovery
+
+Before using the encryption provider, verify that Keybase is available:
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+
+	"github.com/pulumi/pulumi-keybase-encryption/keybase/credentials"
+)
+
+func main() {
+	// Verify Keybase is available
+	if err := credentials.VerifyKeybaseAvailable(); err != nil {
+		log.Fatalf("Keybase is required: %v", err)
+	}
+
+	// Get current username
+	username, err := credentials.GetUsername()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Logged in as: %s\n", username)
+}
+```
+
+### Public Key Caching
 
 ```go
 package main
@@ -80,9 +118,15 @@ import (
 	"log"
 
 	"github.com/pulumi/pulumi-keybase-encryption/keybase/cache"
+	"github.com/pulumi/pulumi-keybase-encryption/keybase/credentials"
 )
 
 func main() {
+	// Verify Keybase is available
+	if err := credentials.VerifyKeybaseAvailable(); err != nil {
+		log.Fatalf("Keybase is required: %v", err)
+	}
+
 	// Create cache manager with default configuration
 	manager, err := cache.NewManager(nil)
 	if err != nil {
