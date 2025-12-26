@@ -15,7 +15,6 @@ func main() {
 	status, err := credentials.DiscoverCredentials()
 	if err != nil {
 		fmt.Printf("  ❌ Credential discovery failed: %v\n", err)
-		fmt.Println()
 		fmt.Println("  💡 Tip: Install Keybase from https://keybase.io/download")
 		fmt.Println("  💡 Tip: Run 'keybase login' to authenticate")
 		

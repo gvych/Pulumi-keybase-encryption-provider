@@ -120,31 +120,88 @@ Validates a Keybase username format.
 
 ### APIError
 
+The API client provides detailed error classification to help distinguish between different types of failures:
+
 ```go
 type APIError struct {
-    Message    string
-    StatusCode int
-    Temporary  bool
+    Message    string        // Human-readable error message
+    StatusCode int           // HTTP status code (0 if not HTTP error)
+    Kind       ErrorKind     // Classification of error
+    Temporary  bool          // Whether error can be retried
+    RetryAfter time.Duration // Suggested retry delay (for rate limiting)
+    Underlying error         // Underlying error (supports errors.Unwrap)
 }
 ```
 
-#### Error Types
+### Error Kinds
 
-- **Network errors**: `Temporary=true`, can be retried
-- **404 Not Found**: User doesn't exist
-- **429 Rate Limit**: Temporary, automatically retried
-- **500 Server Error**: Temporary, automatically retried
-- **400 Bad Request**: Permanent, not retried
+The `ErrorKind` enum provides precise error classification:
 
-#### Checking Error Types
+| Kind | Description | Temporary | Common Causes |
+|------|-------------|-----------|---------------|
+| `ErrorKindNetwork` | Network connectivity failure | Yes | DNS errors, connection refused, network timeout |
+| `ErrorKindTimeout` | Request timeout | Yes | Context deadline exceeded, HTTP client timeout |
+| `ErrorKindRateLimit` | Rate limiting (429) | Yes | Too many requests to API |
+| `ErrorKindNotFound` | User not found (404) | No | Username doesn't exist on Keybase |
+| `ErrorKindInvalidInput` | Invalid request (400) | No | Malformed request, invalid username |
+| `ErrorKindServerError` | Server error (5xx) | Yes | Keybase API internal error |
+| `ErrorKindInvalidResponse` | Can't parse response | No | Invalid JSON, unexpected format |
+
+### Error Checking Methods
 
 ```go
+// Check error type
 if apiErr, ok := err.(*api.APIError); ok {
-    if apiErr.StatusCode == 404 {
-        fmt.Println("User not found")
-    } else if apiErr.IsTemporary() {
-        fmt.Println("Temporary error, try again")
+    // Check specific error kind
+    if apiErr.IsNetworkError() {
+        fmt.Println("Network connectivity issue")
     }
+    
+    if apiErr.IsTimeout() {
+        fmt.Println("Request timed out")
+    }
+    
+    if apiErr.IsRateLimitError() {
+        fmt.Printf("Rate limited, retry after: %v\n", apiErr.RetryAfter)
+    }
+    
+    // Check if retryable
+    if apiErr.IsTemporary() {
+        fmt.Println("Temporary error, safe to retry")
+    }
+    
+    // Access underlying error
+    if errors.Is(apiErr, context.DeadlineExceeded) {
+        fmt.Println("Context deadline exceeded")
+    }
+}
+```
+
+### Error Messages
+
+The client provides clear, actionable error messages that distinguish between different failure scenarios:
+
+- **Network failures**: "network error while connecting to Keybase API"
+- **Timeouts**: "request timed out while connecting to Keybase API"
+- **User not found**: "user 'alice' not found on Keybase"
+- **Multiple users not found**: "users not found on Keybase: alice, bob"
+- **No public key**: "user 'alice' exists but has no primary public key configured"
+- **Rate limiting**: "rate limited by Keybase API (retry after 60s)"
+
+### Unwrapping Errors
+
+The `APIError` type supports Go 1.13+ error unwrapping:
+
+```go
+var netErr net.Error
+if errors.As(err, &netErr) {
+    if netErr.Timeout() {
+        fmt.Println("Network timeout occurred")
+    }
+}
+
+if errors.Is(err, context.DeadlineExceeded) {
+    fmt.Println("Context deadline was exceeded")
 }
 ```
 
@@ -217,14 +274,32 @@ GET https://keybase.io/_/api/1.0/user/lookup.json?usernames=alice,bob&fields=pub
 
 Keybase API has rate limits. The client handles this by:
 
-1. Detecting 429 status code
-2. Automatically retrying with exponential backoff
-3. Respecting `Retry-After` header (if present)
+1. **Detecting 429 status code** - Identifies rate limit errors
+2. **Parsing Retry-After header** - Respects server's suggested retry delay
+3. **Automatic retry** - Retries with appropriate backoff
+4. **Exponential backoff** - Falls back to exponential backoff if no Retry-After header
+
+The `Retry-After` header is parsed in two formats:
+- **Delay-seconds**: `Retry-After: 120` (wait 120 seconds)
+- **HTTP-date**: `Retry-After: Wed, 21 Oct 2025 07:28:00 GMT`
+
+When rate limited, the error includes the suggested retry delay:
+
+```go
+if apiErr, ok := err.(*api.APIError); ok {
+    if apiErr.IsRateLimitError() {
+        fmt.Printf("Rate limited, retry after: %v\n", apiErr.RetryAfter)
+        time.Sleep(apiErr.RetryAfter)
+        // ... retry the request
+    }
+}
+```
 
 **Best Practices:**
 - Batch multiple users in single request
-- Use caching (see `cache` package)
+- Use caching (see `cache` package)  
 - Don't make unnecessary API calls
+- Respect Retry-After delays to avoid further rate limiting
 
 ## Testing
 
