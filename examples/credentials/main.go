@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== Keybase Credentials Discovery Example ===\n")
+	fmt.Println("=== Keybase Credentials Discovery Example ===")
 
 	// Example 1: Full credential discovery
 	fmt.Println("Example 1: Full Credential Discovery")
@@ -16,7 +16,7 @@ func main() {
 	if err != nil {
 		fmt.Printf("  ❌ Credential discovery failed: %v\n", err)
 		fmt.Println("\n  💡 Tip: Install Keybase from https://keybase.io/download")
-		fmt.Println("  💡 Tip: Run 'keybase login' to authenticate\n")
+		fmt.Println("  💡 Tip: Run 'keybase login' to authenticate")
 		
 		// Show partial status even on error
 		if status != nil {

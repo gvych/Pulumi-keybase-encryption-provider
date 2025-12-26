@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -432,5 +434,511 @@ func TestLookupUsersMissingPublicKey(t *testing.T) {
 	_, err := client.LookupUsers(context.Background(), []string{"alice"})
 	if err == nil {
 		t.Error("LookupUsers() expected error for missing public key, got nil")
+	}
+}
+
+func TestRateLimitWithRetryAfter(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			// First attempt: return 429 with Retry-After header
+			w.Header().Set("Retry-After", "1") // 1 second
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte("Rate limit exceeded"))
+			return
+		}
+		// Second attempt: success
+		response := LookupResponse{
+			Status: Status{Code: 0, Name: "OK"},
+			Them: []User{
+				{
+					Basics:     Basics{Username: "alice"},
+					PublicKeys: PublicKeys{Primary: PrimaryKey{KID: "kid", Bundle: "bundle"}},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	config := &ClientConfig{
+		BaseURL:    server.URL,
+		Timeout:    10 * time.Second,
+		MaxRetries: 2,
+		RetryDelay: 100 * time.Millisecond,
+	}
+
+	client := NewClient(config)
+	start := time.Now()
+	keys, err := client.LookupUsers(context.Background(), []string{"alice"})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("LookupUsers() should succeed after retry: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("Expected 1 key, got %d", len(keys))
+	}
+	if attempts != 2 {
+		t.Errorf("Expected 2 attempts, got %d", attempts)
+	}
+	// Should have waited at least 1 second for Retry-After
+	if elapsed < 1*time.Second {
+		t.Errorf("Expected at least 1s delay for Retry-After, got %v", elapsed)
+	}
+}
+
+func TestRateLimitExhaustsRetries(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Retry-After", "1") // Short retry-after for faster test
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte("Rate limit exceeded"))
+	}))
+	defer server.Close()
+
+	config := &ClientConfig{
+		BaseURL:    server.URL,
+		Timeout:    10 * time.Second,
+		MaxRetries: 2,
+		RetryDelay: 10 * time.Millisecond,
+	}
+
+	client := NewClient(config)
+	_, err := client.LookupUsers(context.Background(), []string{"alice"})
+
+	if err == nil {
+		t.Fatal("Expected error for exhausted retries")
+	}
+
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("Expected *APIError, got %T", err)
+	}
+
+	if !apiErr.IsRateLimitError() {
+		t.Errorf("Expected rate limit error, got %v", apiErr.Kind)
+	}
+	if apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("Expected status 429, got %d", apiErr.StatusCode)
+	}
+	if apiErr.RetryAfter != 1*time.Second {
+		t.Errorf("Expected RetryAfter=1s, got %v", apiErr.RetryAfter)
+	}
+	if attempts != 3 {
+		t.Errorf("Expected 3 attempts (initial + 2 retries), got %d", attempts)
+	}
+}
+
+func TestNetworkErrorClassification(t *testing.T) {
+	// Use invalid URL to trigger network error
+	config := &ClientConfig{
+		BaseURL:    "http://invalid-host-that-does-not-exist-12345.test",
+		Timeout:    2 * time.Second,
+		MaxRetries: 0,
+	}
+
+	client := NewClient(config)
+	_, err := client.LookupUsers(context.Background(), []string{"alice"})
+
+	if err == nil {
+		t.Fatal("Expected network error")
+	}
+
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("Expected *APIError, got %T", err)
+	}
+
+	if !apiErr.IsNetworkError() {
+		t.Errorf("Expected network error, got %v", apiErr.Kind)
+	}
+	if !apiErr.IsTemporary() {
+		t.Error("Network errors should be temporary")
+	}
+}
+
+func TestTimeoutErrorClassification(t *testing.T) {
+	// Create server with slow response
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config := &ClientConfig{
+		BaseURL:    server.URL,
+		Timeout:    50 * time.Millisecond, // Very short timeout
+		MaxRetries: 0,
+	}
+
+	client := NewClient(config)
+	_, err := client.LookupUsers(context.Background(), []string{"alice"})
+
+	if err == nil {
+		t.Fatal("Expected timeout error")
+	}
+
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("Expected *APIError, got %T", err)
+	}
+
+	if !apiErr.IsTimeout() {
+		t.Errorf("Expected timeout error, got %v", apiErr.Kind)
+	}
+	if !apiErr.IsTemporary() {
+		t.Error("Timeout errors should be temporary")
+	}
+}
+
+func TestContextCancellationDuringRetry(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	config := &ClientConfig{
+		BaseURL:    server.URL,
+		Timeout:    10 * time.Second,
+		MaxRetries: 5,
+		RetryDelay: 200 * time.Millisecond,
+	}
+
+	client := NewClient(config)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	_, err := client.LookupUsers(ctx, []string{"alice"})
+
+	if err == nil {
+		t.Fatal("Expected error for cancelled context")
+	}
+
+	// Should have tried at most twice before context cancelled during backoff
+	if attempts > 3 {
+		t.Errorf("Expected at most 3 attempts before context cancellation, got %d", attempts)
+	}
+}
+
+func TestNotFoundError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := LookupResponse{
+			Status: Status{Code: 0, Name: "OK"},
+			Them:   []User{}, // Empty result
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	config := &ClientConfig{
+		BaseURL:    server.URL,
+		Timeout:    5 * time.Second,
+		MaxRetries: 0,
+	}
+
+	client := NewClient(config)
+	_, err := client.LookupUsers(context.Background(), []string{"nonexistent"})
+
+	if err == nil {
+		t.Fatal("Expected not found error")
+	}
+
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("Expected *APIError, got %T", err)
+	}
+
+	if apiErr.Kind != ErrorKindNotFound {
+		t.Errorf("Expected ErrorKindNotFound, got %v", apiErr.Kind)
+	}
+	if apiErr.IsTemporary() {
+		t.Error("Not found errors should not be temporary")
+	}
+}
+
+func TestMultipleUsersNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := LookupResponse{
+			Status: Status{Code: 0, Name: "OK"},
+			Them: []User{
+				{
+					Basics:     Basics{Username: "alice"},
+					PublicKeys: PublicKeys{Primary: PrimaryKey{KID: "kid1", Bundle: "bundle1"}},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	config := &ClientConfig{
+		BaseURL:    server.URL,
+		Timeout:    5 * time.Second,
+		MaxRetries: 0,
+	}
+
+	client := NewClient(config)
+	_, err := client.LookupUsers(context.Background(), []string{"alice", "bob", "charlie"})
+
+	if err == nil {
+		t.Fatal("Expected error for missing users")
+	}
+
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("Expected *APIError, got %T", err)
+	}
+
+	if apiErr.Kind != ErrorKindNotFound {
+		t.Errorf("Expected ErrorKindNotFound, got %v", apiErr.Kind)
+	}
+	// Should mention multiple users
+	if !strings.Contains(apiErr.Message, "bob") || !strings.Contains(apiErr.Message, "charlie") {
+		t.Errorf("Error message should mention missing users: %s", apiErr.Message)
+	}
+}
+
+func TestServerError500(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Internal Server Error"))
+	}))
+	defer server.Close()
+
+	config := &ClientConfig{
+		BaseURL:    server.URL,
+		Timeout:    5 * time.Second,
+		MaxRetries: 0,
+	}
+
+	client := NewClient(config)
+	_, err := client.LookupUsers(context.Background(), []string{"alice"})
+
+	if err == nil {
+		t.Fatal("Expected server error")
+	}
+
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("Expected *APIError, got %T", err)
+	}
+
+	if apiErr.Kind != ErrorKindServerError {
+		t.Errorf("Expected ErrorKindServerError, got %v", apiErr.Kind)
+	}
+	if apiErr.StatusCode != http.StatusInternalServerError {
+		t.Errorf("Expected status 500, got %d", apiErr.StatusCode)
+	}
+	if !apiErr.IsTemporary() {
+		t.Error("Server errors should be temporary")
+	}
+}
+
+func TestInvalidJSONResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("invalid json {"))
+	}))
+	defer server.Close()
+
+	config := &ClientConfig{
+		BaseURL:    server.URL,
+		Timeout:    5 * time.Second,
+		MaxRetries: 0,
+	}
+
+	client := NewClient(config)
+	_, err := client.LookupUsers(context.Background(), []string{"alice"})
+
+	if err == nil {
+		t.Fatal("Expected invalid response error")
+	}
+
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("Expected *APIError, got %T", err)
+	}
+
+	if apiErr.Kind != ErrorKindInvalidResponse {
+		t.Errorf("Expected ErrorKindInvalidResponse, got %v", apiErr.Kind)
+	}
+	if apiErr.IsTemporary() {
+		t.Error("Invalid response errors should not be temporary")
+	}
+}
+
+func TestAPIStatusCodeError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := LookupResponse{
+			Status: Status{Code: 205, Name: "NOT_FOUND"}, // Keybase API error code
+			Them:   []User{},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	config := &ClientConfig{
+		BaseURL:    server.URL,
+		Timeout:    5 * time.Second,
+		MaxRetries: 0,
+	}
+
+	client := NewClient(config)
+	_, err := client.LookupUsers(context.Background(), []string{"alice"})
+
+	if err == nil {
+		t.Fatal("Expected API error")
+	}
+
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("Expected *APIError, got %T", err)
+	}
+
+	if apiErr.Kind != ErrorKindNotFound {
+		t.Errorf("Expected ErrorKindNotFound for status code 205, got %v", apiErr.Kind)
+	}
+}
+
+func TestErrorKindString(t *testing.T) {
+	tests := []struct {
+		kind ErrorKind
+		want string
+	}{
+		{ErrorKindNetwork, "NetworkError"},
+		{ErrorKindTimeout, "TimeoutError"},
+		{ErrorKindRateLimit, "RateLimitError"},
+		{ErrorKindNotFound, "NotFoundError"},
+		{ErrorKindInvalidInput, "InvalidInputError"},
+		{ErrorKindServerError, "ServerError"},
+		{ErrorKindInvalidResponse, "InvalidResponseError"},
+		{ErrorKindUnknown, "UnknownError"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if got := tt.kind.String(); got != tt.want {
+				t.Errorf("ErrorKind.String() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAPIErrorUnwrap(t *testing.T) {
+	underlying := errors.New("underlying error")
+	apiErr := &APIError{
+		Message:    "wrapped error",
+		Underlying: underlying,
+	}
+
+	if !errors.Is(apiErr, underlying) {
+		t.Error("errors.Is should find underlying error")
+	}
+
+	var unwrapped *APIError
+	if !errors.As(apiErr, &unwrapped) {
+		t.Error("errors.As should work with APIError")
+	}
+	if unwrapped != apiErr {
+		t.Error("errors.As should return the same APIError")
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	tests := []struct {
+		name   string
+		header string
+		want   time.Duration
+	}{
+		{
+			name:   "seconds format",
+			header: "120",
+			want:   120 * time.Second,
+		},
+		{
+			name:   "empty header",
+			header: "",
+			want:   0,
+		},
+		{
+			name:   "invalid format",
+			header: "invalid",
+			want:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseRetryAfter(tt.header)
+			if got != tt.want {
+				t.Errorf("parseRetryAfter() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHTTPStatusErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		wantKind   ErrorKind
+		wantTemp   bool
+	}{
+		{"BadRequest", http.StatusBadRequest, ErrorKindInvalidInput, false},
+		{"Unauthorized", http.StatusUnauthorized, ErrorKindInvalidInput, false},
+		{"Forbidden", http.StatusForbidden, ErrorKindInvalidInput, false},
+		{"NotFound", http.StatusNotFound, ErrorKindNotFound, false},
+		{"TooManyRequests", http.StatusTooManyRequests, ErrorKindRateLimit, true},
+		{"InternalServerError", http.StatusInternalServerError, ErrorKindServerError, true},
+		{"BadGateway", http.StatusBadGateway, ErrorKindServerError, true},
+		{"ServiceUnavailable", http.StatusServiceUnavailable, ErrorKindServerError, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				w.Write([]byte("error message"))
+			}))
+			defer server.Close()
+
+			config := &ClientConfig{
+				BaseURL:    server.URL,
+				Timeout:    5 * time.Second,
+				MaxRetries: 0,
+			}
+
+			client := NewClient(config)
+			_, err := client.LookupUsers(context.Background(), []string{"alice"})
+
+			if err == nil {
+				t.Fatal("Expected error")
+			}
+
+			apiErr, ok := err.(*APIError)
+			if !ok {
+				t.Fatalf("Expected *APIError, got %T", err)
+			}
+
+			if apiErr.Kind != tt.wantKind {
+				t.Errorf("Kind = %v, want %v", apiErr.Kind, tt.wantKind)
+			}
+			if apiErr.IsTemporary() != tt.wantTemp {
+				t.Errorf("IsTemporary() = %v, want %v", apiErr.IsTemporary(), tt.wantTemp)
+			}
+			if apiErr.StatusCode != tt.statusCode {
+				t.Errorf("StatusCode = %v, want %v", apiErr.StatusCode, tt.statusCode)
+			}
+		})
 	}
 }
