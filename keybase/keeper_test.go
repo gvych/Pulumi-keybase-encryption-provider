@@ -585,3 +585,327 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// TestKeeperStreamingEncryptDecrypt tests streaming encryption/decryption for large messages
+func TestKeeperStreamingEncryptDecrypt(t *testing.T) {
+	// Generate test key pairs
+	keyPair1, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair 1: %v", err)
+	}
+	
+	keyPair2, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair 2: %v", err)
+	}
+
+	// Create mock cache manager
+	cacheManager, err := createMockCacheManager(map[string]saltpack.BoxPublicKey{
+		"alice": keyPair1.PublicKey,
+		"bob":   keyPair2.PublicKey,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create mock cache manager: %v", err)
+	}
+	defer cacheManager.Close()
+
+	tests := []struct {
+		name       string
+		recipients []string
+		size       int // Size in bytes
+		decryptKey saltpack.BoxSecretKey
+	}{
+		{
+			name:       "large message 11 MiB - single recipient",
+			recipients: []string{"alice"},
+			size:       11 * 1024 * 1024, // 11 MiB (triggers streaming)
+			decryptKey: keyPair1.SecretKey,
+		},
+		{
+			name:       "large message 15 MiB - multiple recipients",
+			recipients: []string{"alice", "bob"},
+			size:       15 * 1024 * 1024, // 15 MiB (triggers streaming)
+			decryptKey: keyPair1.SecretKey,
+		},
+		{
+			name:       "large message 20 MiB - decrypt with second key",
+			recipients: []string{"alice", "bob"},
+			size:       20 * 1024 * 1024, // 20 MiB (triggers streaming)
+			decryptKey: keyPair2.SecretKey,
+		},
+		{
+			name:       "small message 1 MiB - no streaming",
+			recipients: []string{"alice"},
+			size:       1 * 1024 * 1024, // 1 MiB (no streaming)
+			decryptKey: keyPair1.SecretKey,
+		},
+		{
+			name:       "exactly 10 MiB - no streaming",
+			recipients: []string{"alice"},
+			size:       10 * 1024 * 1024, // Exactly 10 MiB (no streaming)
+			decryptKey: keyPair1.SecretKey,
+		},
+		{
+			name:       "just over 10 MiB - streaming",
+			recipients: []string{"alice"},
+			size:       10*1024*1024 + 1, // Just over 10 MiB (triggers streaming)
+			decryptKey: keyPair1.SecretKey,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create plaintext of specified size
+			// Use a pattern that's easy to verify
+			plaintext := make([]byte, tt.size)
+			for i := 0; i < tt.size; i++ {
+				plaintext[i] = byte(i % 256)
+			}
+
+			// Create keeper for encryption
+			config := &Config{
+				Recipients: tt.recipients,
+				Format:     FormatSaltpack,
+				CacheTTL:   24 * time.Hour,
+			}
+
+			encryptKeeper, err := NewKeeper(&KeeperConfig{
+				Config:       config,
+				CacheManager: cacheManager,
+			})
+			if err != nil {
+				t.Fatalf("Failed to create encrypt keeper: %v", err)
+			}
+			defer encryptKeeper.Close()
+
+			// Encrypt
+			ctx := context.Background()
+			t.Logf("Encrypting %d bytes...", len(plaintext))
+			ciphertext, err := encryptKeeper.Encrypt(ctx, plaintext)
+			if err != nil {
+				t.Fatalf("Encrypt() error = %v", err)
+			}
+			t.Logf("Encrypted to %d bytes", len(ciphertext))
+
+			if len(ciphertext) == 0 {
+				t.Fatal("Encrypt() returned empty ciphertext")
+			}
+
+			// Create keeper for decryption with the specific key
+			keyring := crypto.NewSimpleKeyring()
+			keyring.AddKey(tt.decryptKey)
+
+			decryptor, err := crypto.NewDecryptor(&crypto.DecryptorConfig{
+				Keyring: keyring,
+			})
+			if err != nil {
+				t.Fatalf("Failed to create decryptor: %v", err)
+			}
+
+			decryptKeeper := &Keeper{
+				config:       config,
+				cacheManager: cacheManager,
+				decryptor:    decryptor,
+				keyring:      keyring,
+			}
+
+			// Decrypt
+			t.Logf("Decrypting %d bytes...", len(ciphertext))
+			decrypted, err := decryptKeeper.Decrypt(ctx, ciphertext)
+			if err != nil {
+				t.Fatalf("Decrypt() error = %v", err)
+			}
+			t.Logf("Decrypted to %d bytes", len(decrypted))
+
+			// Verify size
+			if len(decrypted) != len(plaintext) {
+				t.Errorf("Decrypted size = %d, want %d", len(decrypted), len(plaintext))
+			}
+
+			// Verify content (sample check for performance)
+			// Check first 1000 bytes, last 1000 bytes, and middle 1000 bytes
+			checkRanges := []struct {
+				name  string
+				start int
+				end   int
+			}{
+				{"first 1000", 0, min(1000, len(plaintext))},
+				{"last 1000", max(0, len(plaintext)-1000), len(plaintext)},
+				{"middle 1000", max(0, len(plaintext)/2-500), min(len(plaintext), len(plaintext)/2+500)},
+			}
+
+			for _, r := range checkRanges {
+				if len(decrypted) < r.end {
+					t.Errorf("Decrypted data too short for range %s", r.name)
+					continue
+				}
+				for i := r.start; i < r.end; i++ {
+					if decrypted[i] != plaintext[i] {
+						t.Errorf("Decrypted[%d] = %d, want %d (range: %s)", i, decrypted[i], plaintext[i], r.name)
+						break
+					}
+				}
+			}
+		})
+	}
+}
+
+// max returns the maximum of two integers
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// BenchmarkKeeperEncryptSmall benchmarks encryption of small messages (no streaming)
+func BenchmarkKeeperEncryptSmall(b *testing.B) {
+	keyPair, _ := crypto.GenerateKeyPair()
+	cacheManager, _ := createMockCacheManager(map[string]saltpack.BoxPublicKey{
+		"alice": keyPair.PublicKey,
+	})
+	defer cacheManager.Close()
+
+	config := &Config{
+		Recipients: []string{"alice"},
+		Format:     FormatSaltpack,
+		CacheTTL:   24 * time.Hour,
+	}
+
+	keeper, _ := NewKeeper(&KeeperConfig{
+		Config:       config,
+		CacheManager: cacheManager,
+	})
+	defer keeper.Close()
+
+	plaintext := []byte("Small message for benchmarking")
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = keeper.Encrypt(ctx, plaintext)
+	}
+}
+
+// BenchmarkKeeperEncryptLarge benchmarks encryption of large messages (streaming)
+func BenchmarkKeeperEncryptLarge(b *testing.B) {
+	keyPair, _ := crypto.GenerateKeyPair()
+	cacheManager, _ := createMockCacheManager(map[string]saltpack.BoxPublicKey{
+		"alice": keyPair.PublicKey,
+	})
+	defer cacheManager.Close()
+
+	config := &Config{
+		Recipients: []string{"alice"},
+		Format:     FormatSaltpack,
+		CacheTTL:   24 * time.Hour,
+	}
+
+	keeper, _ := NewKeeper(&KeeperConfig{
+		Config:       config,
+		CacheManager: cacheManager,
+	})
+	defer keeper.Close()
+
+	// 11 MiB message (triggers streaming)
+	plaintext := make([]byte, 11*1024*1024)
+	for i := range plaintext {
+		plaintext[i] = byte(i % 256)
+	}
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = keeper.Encrypt(ctx, plaintext)
+	}
+}
+
+// BenchmarkKeeperDecryptSmall benchmarks decryption of small messages (no streaming)
+func BenchmarkKeeperDecryptSmall(b *testing.B) {
+	keyPair, _ := crypto.GenerateKeyPair()
+	cacheManager, _ := createMockCacheManager(map[string]saltpack.BoxPublicKey{
+		"alice": keyPair.PublicKey,
+	})
+	defer cacheManager.Close()
+
+	config := &Config{
+		Recipients: []string{"alice"},
+		Format:     FormatSaltpack,
+		CacheTTL:   24 * time.Hour,
+	}
+
+	keeper, _ := NewKeeper(&KeeperConfig{
+		Config:       config,
+		CacheManager: cacheManager,
+	})
+	defer keeper.Close()
+
+	plaintext := []byte("Small message for benchmarking")
+	ctx := context.Background()
+	ciphertext, _ := keeper.Encrypt(ctx, plaintext)
+
+	// Create decryption keeper
+	keyring := crypto.NewSimpleKeyring()
+	keyring.AddKey(keyPair.SecretKey)
+	decryptor, _ := crypto.NewDecryptor(&crypto.DecryptorConfig{
+		Keyring: keyring,
+	})
+	decryptKeeper := &Keeper{
+		config:       config,
+		cacheManager: cacheManager,
+		decryptor:    decryptor,
+		keyring:      keyring,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = decryptKeeper.Decrypt(ctx, ciphertext)
+	}
+}
+
+// BenchmarkKeeperDecryptLarge benchmarks decryption of large messages (streaming)
+func BenchmarkKeeperDecryptLarge(b *testing.B) {
+	keyPair, _ := crypto.GenerateKeyPair()
+	cacheManager, _ := createMockCacheManager(map[string]saltpack.BoxPublicKey{
+		"alice": keyPair.PublicKey,
+	})
+	defer cacheManager.Close()
+
+	config := &Config{
+		Recipients: []string{"alice"},
+		Format:     FormatSaltpack,
+		CacheTTL:   24 * time.Hour,
+	}
+
+	keeper, _ := NewKeeper(&KeeperConfig{
+		Config:       config,
+		CacheManager: cacheManager,
+	})
+	defer keeper.Close()
+
+	// 11 MiB message (triggers streaming)
+	plaintext := make([]byte, 11*1024*1024)
+	for i := range plaintext {
+		plaintext[i] = byte(i % 256)
+	}
+	ctx := context.Background()
+	ciphertext, _ := keeper.Encrypt(ctx, plaintext)
+
+	// Create decryption keeper
+	keyring := crypto.NewSimpleKeyring()
+	keyring.AddKey(keyPair.SecretKey)
+	decryptor, _ := crypto.NewDecryptor(&crypto.DecryptorConfig{
+		Keyring: keyring,
+	})
+	decryptKeeper := &Keeper{
+		config:       config,
+		cacheManager: cacheManager,
+		decryptor:    decryptor,
+		keyring:      keyring,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = decryptKeeper.Decrypt(ctx, ciphertext)
+	}
+}
