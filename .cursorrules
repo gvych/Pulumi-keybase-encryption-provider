@@ -1,0 +1,248 @@
+# Pulumi Keybase Encryption Provider - Cursor Rules
+
+## Project Overview
+
+This project implements a Keybase encryption provider for Pulumi's Go Cloud Development Kit. It enables Pulumi to encrypt secrets using Keybase public keys, supporting multiple recipients with native Saltpack encryption.
+
+## Architecture
+
+The provider follows a three-layer architecture:
+
+1. **API Integration Layer**: Calls Keybase REST API to lookup user public keys and resolve usernames
+2. **Cryptographic Layer**: Uses `github.com/keybase/saltpack` Go library for encryption/decryption with native multiple-recipient support
+3. **Keyring Integration Layer**: Accesses local Keybase keyring for decryption operations
+
+### Encryption Flow
+Pulumi secrets → Recipient usernames → API lookup → Public keys → Saltpack encryption → Ciphertext
+
+### Decryption Flow
+Ciphertext → Saltpack decryption (auto-finds matching private key) → Plaintext
+
+## Core Interface Requirements
+
+The provider implements the `driver.Keeper` interface from `gocloud.dev/secrets` with five required methods:
+
+1. **Encrypt(ctx context.Context, plaintext []byte) ([]byte, error)**
+   - Fetch public keys for each recipient via API lookup (with caching)
+   - Call `saltpack.Seal()` with sender's secret key and recipient public keys
+   - Return binary-encoded ciphertext
+
+2. **Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)**
+   - Load user's private key from `~/.config/keybase/`
+   - Call `saltpack.Open()` with the ciphertext and keyring
+   - Return plaintext
+
+3. **Close() error**
+   - Release any open resources (cache connections, HTTP clients)
+
+4. **ErrorAs(err error, i any) bool**
+   - Map Keybase and Saltpack errors to driver-specific types
+
+5. **ErrorCode(error) gcerrors.ErrorCode**
+   - Map all errors to standard Go Cloud error codes (InvalidArgument, NotFound, Internal, Unavailable)
+
+## URL Scheme
+
+The provider uses a custom URL scheme for configuration:
+
+```
+keybase://user1,user2,user3?format=saltpack&cache_ttl=86400
+```
+
+**Components:**
+- `keybase://` - Scheme identifier (required)
+- `user1,user2,user3` - Comma-separated recipient usernames (required)
+- `format` - Encryption format: `saltpack` (default) or `pgp` (optional)
+- `cache_ttl` - Public key cache TTL in seconds (default: 86400, optional)
+- `verify_proofs` - Require identity proof verification (boolean, optional)
+
+**Username validation**: Alphanumeric + underscore only
+
+## Key Technical Decisions
+
+### Encryption Format
+- **Use Saltpack** (not legacy PGP) for:
+  - Simpler implementation
+  - Modern cryptography (ChaCha20-Poly1305, Curve25519)
+  - Native multiple-recipient support via `receivers []BoxPublicKey`
+  - No manual PGP recipient handling required
+
+### Caching Strategy
+- **TTL-based caching** with 24-hour default
+- Cache file location: `~/.config/pulumi/keybase_keyring_cache.json`
+- JSON format with expiration timestamps
+- Separate cache entry for each Keybase username
+- Cache invalidation on demand (key rotation monitoring is advanced feature)
+
+### Armoring
+- **ASCII-armored Base62** (Saltpack's native armoring)
+- More readable state files than binary
+- Aids debugging while maintaining security
+- No additional encoding layer needed
+
+### Keyring Integration
+- Use local `~/.config/keybase/` directory (not CLI subprocess)
+- Better performance and clearer error handling
+- Requires Keybase to be installed and configured locally
+
+### Error Handling
+- All Keybase-specific errors map to standard Go Cloud error codes
+- Consistent with other Pulumi providers
+- Provide detailed error messages distinguishing:
+  - Network failures vs. user lookup failures
+  - Invalid keys vs. missing keys
+  - Cryptographic failures vs. API failures
+
+## API Integration
+
+### Keybase REST API
+- Endpoint: `https://keybase.io/_/api/1.0/user/lookup.json`
+- Accepts comma-separated usernames
+- Returns user objects with `public_keys.primary.bundle` (PGP public key)
+- CORS enabled, supports multiple simultaneous lookups
+- Implement retry logic with exponential backoff for transient failures
+- Handle 429 status code (rate limiting) with backoff
+
+### Saltpack Functions
+
+```go
+// Encrypts plaintext to multiple recipients
+func Seal(version Version, plaintext []byte, sender BoxSecretKey, 
+  receivers []BoxPublicKey) (out []byte, err error)
+
+// Returns MessageKeyInfo indicating which recipient key was used for decryption
+func Open(versionValidator VersionValidator, ciphertext []byte, 
+  keyring Keyring) (i *MessageKeyInfo, plaintext []byte, err error)
+```
+
+**Key points:**
+- `receivers []BoxPublicKey` accepts arbitrary-length slice
+- Each recipient gets independently encrypted session key
+- Decryption automatically finds matching private key
+- `MessageKeyInfo` indicates which recipient key was used
+- Prevents enumeration attacks (no visible recipient list)
+
+## Package Structure
+
+Organize code into:
+- `keybase/` - Main package (public API)
+- `keybase/internal/` - Private APIs
+- `keybase/api/` - REST client for Keybase API
+- `keybase/crypto/` - Encryption/decryption logic
+
+Use clear separation of concerns.
+
+## Implementation Guidelines
+
+### Public Key Caching
+- Cache file: `~/.config/pulumi/keybase_keyring_cache.json`
+- JSON format with expiration timestamps
+- TTL checking with timestamp comparison
+- Cache invalidation on demand
+- Return cached keys if valid, otherwise fetch fresh
+
+### Credential Discovery
+- Detect if Keybase CLI is installed and configured
+- Verify Keybase user is logged in
+- Read authentication status from Keybase directory
+- Fail gracefully with clear error if Keybase not available
+
+### Key Conversion
+- Convert PGP public key bundle (ASCII text) to saltpack `BoxPublicKey`
+- Parse `public_keys.primary.kid` as key identifier
+- Validate key format and size
+- Handle both PGP and saltpack key formats
+
+### Sender Key Handling
+- Determine sender identity (current Keybase user or configured username)
+- Load sender's private key from `~/.config/keybase/`
+- Validate sender key format
+- Handle missing or invalid sender key gracefully
+
+### Streaming Encryption
+- Use `saltpack.NewEncryptArmor62Stream()` for messages >10 MiB
+- Avoid loading entire ciphertext in memory
+- Write directly to buffer/file
+
+### Keyring Loading
+- Read private keys from `~/.config/keybase/`
+- Implement `saltpack.Keyring` interface by wrapping Keybase key storage
+- Cache loaded keys in memory with TTL
+
+### Error Mapping
+- `saltpack.ErrBadCiphertext` → GCError InvalidArgument
+- `ErrNoDecryptionKey` → GCError NotFound
+- Timeout/network errors → GCError Unavailable
+- Provide detailed error messages
+
+### Key Rotation Support
+- Detect when old messages use retired keys
+- Implement lazy re-encryption path
+- Document that re-decryption with new keys may be needed after rotation
+
+### Offline Decryption
+- Allow decryption without network access (keys already fetched)
+- Document that initial encryption requires network for key lookup
+- Later decryption works offline
+
+## Testing Requirements
+
+- **Unit tests**: >90% code coverage
+- Test Encrypt/Decrypt with 1-10 recipients
+- Test all error paths (missing users, invalid keys, network errors)
+- Test URL parsing and caching
+- Test with 100+ recipients for performance
+- Test key rotation scenarios
+- Test edge cases: empty messages, very large messages (>1GB), special characters, Unicode, binary data
+- Cross-platform testing: Linux, macOS, Windows
+- Verify secrets never appear in logs
+- Test with invalid/revoked keys and corrupted ciphertext
+
+## Performance Targets
+
+- <500ms encrypt/decrypt latency at p95 (excluding network API calls)
+- Public key caching should reduce API calls by >80% in typical usage
+- Support 1-100 Keybase users in a single encryption operation
+
+## Dependencies
+
+- **Go 1.18+** (for generics and modern language features)
+- `github.com/keybase/saltpack` - Encryption format and Go library
+- `net/http` - Standard library for REST API calls
+- `encoding/json` - Standard library for JSON parsing
+- `gocloud.dev/secrets` - Pulumi's secrets abstraction layer
+- `crypto/rand` - Standard library for randomness
+
+## Code Style
+
+- Follow Go standard formatting and conventions
+- Use proper context propagation and cancellation
+- Validate input/output sizes
+- Implement proper resource cleanup in Close()
+- Use clear, descriptive error messages
+- Document public APIs with Go doc comments
+- Ensure thread-safety where appropriate
+
+## Security Considerations
+
+- Never log secrets or plaintext
+- Properly clean up keys in memory
+- Audit error messages for information leaks
+- Verify proper key format and size validation
+- Handle corrupted ciphertext gracefully
+- Support key rotation without breaking old state files
+
+## Registration
+
+- Create `register.go` with init() function that registers the driver
+- Make registration automatic on import
+- Document import requirement in README
+- Register with Go CDK's URL multiplexer
+
+## Build & Versioning
+
+- Use semantic versioning (semver)
+- Set build metadata and version strings
+- Test reproducible builds
+- Support multiple platforms (Linux, macOS, Windows)
+
