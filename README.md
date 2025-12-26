@@ -6,6 +6,36 @@ A Keybase encryption provider for Pulumi's Go Cloud Development Kit, enabling se
 
 This provider implements Pulumi's `driver.Keeper` interface to encrypt and decrypt secrets using Keybase's public key infrastructure. It supports multiple recipients, automatic public key caching, and modern cryptography through the Saltpack format.
 
+## Quick Start
+
+**New to this provider?** See the [Quick Start Guide](QUICKSTART.md) for a 5-minute setup.
+
+```yaml
+# Pulumi.<stack>.yaml
+config:
+  pulumi:secretsprovider: keybase://alice,bob,charlie
+```
+
+## Documentation
+
+📖 **[Complete Documentation Index](DOCUMENTATION_INDEX.md)** - Navigate all documentation
+
+### Getting Started
+- **[Quick Start Guide](QUICKSTART.md)** - Get up and running in 5 minutes ⭐
+- **[Pulumi Configuration Guide](PULUMI_CONFIGURATION.md)** - Complete Pulumi setup and configuration
+- **[Environment Variables](ENVIRONMENT_VARIABLES.md)** - Environment variable reference
+- **[Example Configurations](examples/pulumi_configs/)** - Real-world Pulumi stack examples
+
+### Technical Documentation
+- **[URL Scheme Specification](keybase/URL_PARSING.md)** - URL format and parsing details
+- **[Cache Manager API](keybase/cache/README.md)** - Public key caching implementation
+- **[API Client](keybase/api/README.md)** - Keybase API integration
+- **[Credentials](keybase/credentials/README.md)** - Credential discovery
+
+### Examples
+- **[Code Examples](examples/)** - Working Go code examples
+- **[Pulumi Configs](examples/pulumi_configs/)** - Complete stack configuration examples ⭐
+
 ## Phase 1: Public Key Caching & Credential Discovery (Current Implementation)
 
 Phase 1 implements the foundational public key caching infrastructure and credential discovery with the following components:
@@ -75,7 +105,66 @@ The cache is stored at `~/.config/pulumi/keybase_keyring_cache.json`:
 go get github.com/pulumi/pulumi-keybase-encryption
 ```
 
-## Usage
+## Quick Usage
+
+### Basic Configuration
+
+Add to your `Pulumi.<stack>.yaml`:
+
+```yaml
+config:
+  pulumi:secretsprovider: keybase://alice,bob,charlie
+```
+
+### Set and Use Secrets
+
+```bash
+# Set a secret
+pulumi config set myapp:apiKey "secret-value" --secret
+
+# Use in code
+const apiKey = config.requireSecret("apiKey");
+```
+
+**See the [Quick Start Guide](QUICKSTART.md) for complete setup instructions.**
+
+## Configuration Examples
+
+We provide comprehensive configuration examples for different use cases:
+
+### By Team Size
+- **[Single User](examples/pulumi_configs/Pulumi.single-user.yaml)** - Individual developer setup
+- **[Team](examples/pulumi_configs/Pulumi.team.yaml)** - Small team (2-10 members)
+
+### By Environment
+- **[Development](examples/pulumi_configs/Pulumi.dev.yaml)** - Short cache, debug settings
+- **[Staging](examples/pulumi_configs/Pulumi.staging.yaml)** - Moderate security
+- **[Production](examples/pulumi_configs/Pulumi.production.yaml)** - Strict security, identity verification
+
+### Advanced
+- **[No Cache](examples/pulumi_configs/Pulumi.no-cache.yaml)** - Testing/frequent rotation
+- **[Legacy PGP](examples/pulumi_configs/Pulumi.legacy-pgp.yaml)** - PGP format compatibility
+
+**See [examples/pulumi_configs/](examples/pulumi_configs/) for all examples and detailed usage.**
+
+## URL Scheme
+
+The provider uses a URL scheme for configuration:
+
+```
+keybase://user1,user2,user3?format=saltpack&cache_ttl=86400&verify_proofs=true
+```
+
+| Component | Description | Default | Required |
+|-----------|-------------|---------|----------|
+| `user1,user2,user3` | Recipient usernames | - | Yes |
+| `format` | Encryption format | `saltpack` | No |
+| `cache_ttl` | Cache TTL (seconds) | `86400` (24h) | No |
+| `verify_proofs` | Identity verification | `false` | No |
+
+**See [URL Scheme Documentation](keybase/URL_PARSING.md) for complete specification.**
+
+## Programmatic Usage
 
 ### Credential Discovery
 
@@ -262,7 +351,44 @@ Fetches public keys for multiple users from the Keybase API.
 
 Validates a Keybase username format.
 
-## Configuration
+## Configuration Options
+
+### Stack Configuration (Recommended)
+
+Configure in `Pulumi.<stack>.yaml`:
+
+```yaml
+config:
+  pulumi:secretsprovider: keybase://alice,bob?format=saltpack&cache_ttl=86400&verify_proofs=true
+```
+
+### Environment Variables
+
+```bash
+export KEYBASE_RECIPIENTS="alice,bob,charlie"
+export KEYBASE_FORMAT="saltpack"
+export KEYBASE_CACHE_TTL="86400"
+export KEYBASE_VERIFY_PROOFS="true"
+```
+
+**See [Environment Variables](ENVIRONMENT_VARIABLES.md) for complete reference.**
+
+### Programmatic Configuration
+
+```go
+config := &cache.ManagerConfig{
+    CacheConfig: &cache.CacheConfig{
+        FilePath: "~/.config/pulumi/keybase_cache.json",
+        TTL:      24 * time.Hour,
+    },
+    APIConfig: &api.ClientConfig{
+        Timeout:    30 * time.Second,
+        MaxRetries: 3,
+    },
+}
+```
+
+**See [Pulumi Configuration Guide](PULUMI_CONFIGURATION.md) for detailed configuration options.**
 
 ### Cache Configuration
 
@@ -381,6 +507,23 @@ Contributions are welcome! Please ensure:
 
 This project follows Pulumi's licensing terms.
 
+## Complete Documentation
+
+### User Guides
+- **[Quick Start Guide](QUICKSTART.md)** - 5-minute setup guide
+- **[Pulumi Configuration](PULUMI_CONFIGURATION.md)** - Complete Pulumi setup
+- **[Environment Variables](ENVIRONMENT_VARIABLES.md)** - Environment configuration
+
+### Technical References
+- **[URL Scheme](keybase/URL_PARSING.md)** - URL format specification
+- **[Cache Manager](keybase/cache/README.md)** - Cache API reference
+- **[API Client](keybase/api/README.md)** - Keybase API integration
+- **[Credentials](keybase/credentials/README.md)** - Credential discovery
+
+### Examples
+- **[Pulumi Configurations](examples/pulumi_configs/)** - Complete stack examples
+- **[Code Examples](examples/)** - Working Go examples
+
 ## Related Projects
 
 - [Keybase](https://keybase.io/) - Secure messaging and file sharing
@@ -392,9 +535,11 @@ This project follows Pulumi's licensing terms.
 
 For issues and questions:
 
-- GitHub Issues: [Report bugs and feature requests]
-- Documentation: [Full API documentation]
-- Community: [Pulumi Community Slack]
+- **Quick Start:** [QUICKSTART.md](QUICKSTART.md) - Get started in 5 minutes
+- **Configuration:** [PULUMI_CONFIGURATION.md](PULUMI_CONFIGURATION.md) - Complete setup guide
+- **GitHub Issues:** Report bugs and feature requests
+- **Documentation:** See guides above for detailed information
+- **Community:** Pulumi Community Slack
 
 ## Acknowledgments
 
