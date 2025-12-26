@@ -18,19 +18,19 @@ var (
 	ErrKeyGenerationFailed = errors.New("ephemeral key generation failed")
 )
 
-// BoxPublicKey represents a NaCl box public key (32 bytes)
-type BoxPublicKey [32]byte
+// RawPublicKey represents a NaCl box public key (32 bytes)
+type RawPublicKey [32]byte
 
-// BoxSecretKey represents a NaCl box secret key (32 bytes)
-type BoxSecretKey [32]byte
+// RawSecretKey represents a NaCl box secret key (32 bytes)
+type RawSecretKey [32]byte
 
 // EphemeralKeyPair represents a generated ephemeral key pair
 type EphemeralKeyPair struct {
 	// PublicKey is the public key component
-	PublicKey BoxPublicKey
+	PublicKey RawPublicKey
 	
 	// SecretKey is the secret key component
-	SecretKey BoxSecretKey
+	SecretKey RawSecretKey
 }
 
 // EphemeralKeyCreator provides methods for generating ephemeral key pairs
@@ -83,8 +83,8 @@ func (ekc *EphemeralKeyCreator) GenerateKey() (*EphemeralKeyPair, error) {
 	}
 
 	return &EphemeralKeyPair{
-		PublicKey: BoxPublicKey(*publicKey),
-		SecretKey: BoxSecretKey(*secretKey),
+		PublicKey: RawPublicKey(*publicKey),
+		SecretKey: RawSecretKey(*secretKey),
 	}, nil
 }
 
@@ -169,18 +169,18 @@ func contains(s, substr string) bool {
 }
 
 // Bytes returns the public key as a byte slice
-func (pk BoxPublicKey) Bytes() []byte {
+func (pk RawPublicKey) Bytes() []byte {
 	return pk[:]
 }
 
 // Bytes returns the secret key as a byte slice
-func (sk BoxSecretKey) Bytes() []byte {
+func (sk RawSecretKey) Bytes() []byte {
 	return sk[:]
 }
 
 // Zero securely zeroes out the secret key in memory
 // This should be called when the key is no longer needed
-func (sk *BoxSecretKey) Zero() {
+func (sk *RawSecretKey) Zero() {
 	for i := range sk {
 		sk[i] = 0
 	}
