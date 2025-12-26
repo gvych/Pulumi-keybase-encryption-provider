@@ -392,47 +392,47 @@ func TestContains(t *testing.T) {
 	}
 }
 
-// TestBoxPublicKey_Bytes tests the Bytes method
-func TestBoxPublicKey_Bytes(t *testing.T) {
-	var key BoxPublicKey
+// TestRawPublicKey_Bytes tests the Bytes method
+func TestRawPublicKey_Bytes(t *testing.T) {
+	var key RawPublicKey
 	for i := range key {
 		key[i] = byte(i)
 	}
 	
 	bytes := key.Bytes()
 	if len(bytes) != 32 {
-		t.Errorf("BoxPublicKey.Bytes() length = %d, want 32", len(bytes))
+		t.Errorf("RawPublicKey.Bytes() length = %d, want 32", len(bytes))
 	}
 	
 	for i := range key {
 		if bytes[i] != byte(i) {
-			t.Errorf("BoxPublicKey.Bytes()[%d] = %d, want %d", i, bytes[i], byte(i))
+			t.Errorf("RawPublicKey.Bytes()[%d] = %d, want %d", i, bytes[i], byte(i))
 		}
 	}
 }
 
-// TestBoxSecretKey_Bytes tests the Bytes method
-func TestBoxSecretKey_Bytes(t *testing.T) {
-	var key BoxSecretKey
+// TestRawSecretKey_Bytes tests the Bytes method
+func TestRawSecretKey_Bytes(t *testing.T) {
+	var key RawSecretKey
 	for i := range key {
 		key[i] = byte(i)
 	}
 	
 	bytes := key.Bytes()
 	if len(bytes) != 32 {
-		t.Errorf("BoxSecretKey.Bytes() length = %d, want 32", len(bytes))
+		t.Errorf("RawSecretKey.Bytes() length = %d, want 32", len(bytes))
 	}
 	
 	for i := range key {
 		if bytes[i] != byte(i) {
-			t.Errorf("BoxSecretKey.Bytes()[%d] = %d, want %d", i, bytes[i], byte(i))
+			t.Errorf("RawSecretKey.Bytes()[%d] = %d, want %d", i, bytes[i], byte(i))
 		}
 	}
 }
 
-// TestBoxSecretKey_Zero tests that secret keys can be zeroed
-func TestBoxSecretKey_Zero(t *testing.T) {
-	var key BoxSecretKey
+// TestRawSecretKey_Zero tests that secret keys can be zeroed
+func TestRawSecretKey_Zero(t *testing.T) {
+	var key RawSecretKey
 	for i := range key {
 		key[i] = byte(i)
 	}
@@ -441,7 +441,7 @@ func TestBoxSecretKey_Zero(t *testing.T) {
 	
 	for i := range key {
 		if key[i] != 0 {
-			t.Errorf("BoxSecretKey.Zero() did not zero byte at index %d, got %d", i, key[i])
+			t.Errorf("RawSecretKey.Zero() did not zero byte at index %d, got %d", i, key[i])
 		}
 	}
 }
