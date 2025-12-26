@@ -56,6 +56,24 @@ This example shows:
 - Viewing cache file contents
 - Cache statistics
 
+### Caching Example
+
+Comprehensive demonstration of the caching layer:
+
+```bash
+cd examples/caching
+go run main.go
+```
+
+This example shows:
+- Direct cache usage with Set/Get operations
+- Cache manager integration with API client
+- TTL-based expiration
+- Cache statistics and monitoring
+- Entry pruning and invalidation
+- Batch operations and performance optimization
+- Cache persistence across application restarts
+
 ## Using with Real Keybase API
 
 To test with the real Keybase API, uncomment the relevant sections in the examples:
