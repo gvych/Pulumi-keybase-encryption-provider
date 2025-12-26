@@ -1,0 +1,21 @@
+# No Cache Configuration
+#
+# This configuration disables public key caching.
+# Useful for testing or when keys are frequently rotated.
+
+config:
+  # Keybase secrets provider with cache disabled (cache_ttl=0)
+  # This will fetch public keys from API on every operation
+  # Not recommended for production due to increased API calls
+  pulumi:secretsprovider: keybase://alice,bob?cache_ttl=0
+  
+  # AWS Configuration
+  aws:region: us-west-2
+  
+  # Application Configuration
+  myapp:environment: testing
+  myapp:note: This stack disables caching for testing purposes
+  
+  # Secrets
+  myapp:testSecret:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...

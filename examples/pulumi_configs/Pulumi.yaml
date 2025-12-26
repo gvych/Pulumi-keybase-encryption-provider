@@ -1,0 +1,6 @@
+name: my-infrastructure
+runtime: nodejs
+description: Example infrastructure project using Keybase encryption provider
+
+# This is the main project file. Stack-specific configurations
+# are defined in Pulumi.<stack-name>.yaml files.

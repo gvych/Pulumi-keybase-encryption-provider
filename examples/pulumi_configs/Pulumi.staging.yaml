@@ -1,0 +1,29 @@
+# Staging Stack Configuration
+#
+# This stack uses Keybase encryption with moderate security settings
+# suitable for pre-production testing.
+
+config:
+  # Keybase secrets provider configuration
+  # Recipients: dev team + QA team
+  # Cache TTL: 12 hours (43200 seconds) for balance between performance and freshness
+  pulumi:secretsprovider: keybase://alice_dev,bob_dev,charlie_qa,dave_lead?cache_ttl=43200
+  
+  # AWS Configuration
+  aws:region: us-west-2
+  
+  # Application Configuration
+  myapp:environment: staging
+  myapp:debugMode: "false"
+  myapp:logLevel: info
+  
+  # Secrets (encrypted with Keybase provider)
+  # These values are encrypted for all configured recipients
+  myapp:databasePassword:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
+  
+  myapp:apiKey:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
+  
+  myapp:jwtSecret:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...

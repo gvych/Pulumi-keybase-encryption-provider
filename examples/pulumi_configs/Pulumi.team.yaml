@@ -1,0 +1,27 @@
+# Team Configuration
+#
+# This configuration is suitable for small teams (2-10 members)
+# working on shared infrastructure.
+
+config:
+  # Keybase secrets provider - team members
+  # Multiple recipients can decrypt the same secrets
+  # Cache TTL: 24 hours (default)
+  pulumi:secretsprovider: keybase://alice,bob,charlie,dave,eve
+  
+  # AWS Configuration
+  aws:region: us-west-2
+  
+  # Application Configuration
+  myapp:environment: team-shared
+  myapp:teamName: platform-team
+  
+  # Secrets
+  myapp:databasePassword:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
+  
+  myapp:apiKey:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
+  
+  myapp:slackWebhook:
+    secure: AAAAAQAAABBQdWx1bWkgU2VjcmV0...
