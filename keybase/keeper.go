@@ -331,28 +331,14 @@ func loadLocalSecretKey(keyring *crypto.SimpleKeyring) error {
 		return fmt.Errorf("keybase not available: %w", err)
 	}
 	
-	// Get the current username
-	username, err := credentials.GetUsername()
+	// Load the sender key (which includes the secret key for the current user)
+	senderKey, err := crypto.LoadSenderKey(nil)
 	if err != nil {
-		return fmt.Errorf("failed to get username: %w", err)
+		return fmt.Errorf("failed to load sender key: %w", err)
 	}
 	
-	// Get credential status which includes config directory
-	status, err := credentials.DiscoverCredentials()
-	if err != nil {
-		return fmt.Errorf("failed to discover credentials: %w", err)
-	}
+	// Add the secret key to the keyring
+	keyring.AddKey(senderKey.SecretKey)
 	
-	configDir := status.ConfigDir
-	
-	// For now, we'll return an error indicating that key loading is not yet implemented
-	// In a full implementation, you would:
-	// 1. Read the user's secret key from the Keybase config directory
-	// 2. Parse the key (handle PGP or NaCl format)
-	// 3. Add it to the keyring
-	
-	_ = username
-	_ = configDir
-	
-	return fmt.Errorf("local secret key loading not yet implemented")
+	return nil
 }
