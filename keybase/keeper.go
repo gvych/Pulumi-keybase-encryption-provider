@@ -3,6 +3,7 @@ package keybase
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/keybase/saltpack"
@@ -231,6 +232,13 @@ func (k *Keeper) Encrypt(ctx context.Context, plaintext []byte) ([]byte, error) 
 // This method automatically detects the message size and uses streaming
 // decryption for large messages (>10 MiB) to avoid loading the entire
 // plaintext into memory.
+//
+// Error handling (per PUL-24):
+// - ErrNoDecryptionKey → NotFound (no matching private key in keyring)
+// - ErrBadCiphertext → InvalidArgument (corrupted or tampered ciphertext)
+// - Context timeout → DeadlineExceeded
+// - Context cancellation → Canceled
+// - Other errors → Internal
 func (k *Keeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) == 0 {
 		return nil, &KeeperError{
@@ -239,12 +247,27 @@ func (k *Keeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
 		}
 	}
 	
+	// Check for context errors before decryption
+	if err := ctx.Err(); err != nil {
+		return nil, k.classifyContextError(err, "decryption")
+	}
+	
 	// Use streaming for large ciphertexts (>10 MiB)
 	const streamingThreshold = 10 * 1024 * 1024 // 10 MiB
 	
 	if len(ciphertext) > streamingThreshold {
 		// Use streaming decryption for large messages
-		return k.decryptStreaming(ciphertext)
+		plaintext, err := k.decryptStreaming(ciphertext)
+		if err != nil {
+			return nil, err // Already classified by decryptStreaming
+		}
+		
+		// Check for context errors after decryption
+		if err := ctx.Err(); err != nil {
+			return nil, k.classifyContextError(err, "decryption")
+		}
+		
+		return plaintext, nil
 	}
 	
 	// Use in-memory decryption for smaller messages
@@ -254,12 +277,13 @@ func (k *Keeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
 		// If armored decryption fails, try binary decryption
 		plaintext, _, err = k.decryptor.Decrypt(ciphertext)
 		if err != nil {
-			return nil, &KeeperError{
-				Message: fmt.Sprintf("decryption failed: %v", err),
-				Code: gcerrors.InvalidArgument,
-				Underlying: err,
-			}
+			return nil, k.classifyDecryptionError(err)
 		}
+	}
+	
+	// Check for context errors after decryption
+	if err := ctx.Err(); err != nil {
+		return nil, k.classifyContextError(err, "decryption")
 	}
 	
 	return plaintext, nil
@@ -299,11 +323,7 @@ func (k *Keeper) decryptStreaming(ciphertext []byte) ([]byte, error) {
 		
 		_, err = k.decryptor.DecryptStream(ciphertextReader, &plaintextBuf)
 		if err != nil {
-			return nil, &KeeperError{
-				Message: fmt.Sprintf("streaming decryption failed: %v", err),
-				Code: gcerrors.InvalidArgument,
-				Underlying: err,
-			}
+			return nil, k.classifyDecryptionError(err)
 		}
 	}
 	
@@ -318,12 +338,24 @@ func (k *Keeper) Close() error {
 	return nil
 }
 
-// ErrorAs maps Keeper errors to specific error types
+// ErrorAs maps Keeper errors to specific error types.
+//
+// This method supports error type checking for:
+// - KeeperError (Keeper-specific errors)
+// - api.APIError (API-related errors)
+// - Saltpack errors (ErrBadCiphertext, ErrBadTag, ErrBadFrame, etc.)
+//
+// For Saltpack errors, it unwraps the KeeperError to access the underlying error.
 func (k *Keeper) ErrorAs(err error, target interface{}) bool {
 	if keeperErr, ok := err.(*KeeperError); ok {
 		if ptr, ok := target.(**KeeperError); ok {
 			*ptr = keeperErr
 			return true
+		}
+		
+		// Try to unwrap and check underlying Saltpack errors
+		if keeperErr.Underlying != nil {
+			return errors.As(keeperErr.Underlying, target)
 		}
 	}
 	
@@ -335,10 +367,18 @@ func (k *Keeper) ErrorAs(err error, target interface{}) bool {
 		}
 	}
 	
-	return false
+	// Fallback to standard errors.As for direct Saltpack errors
+	return errors.As(err, target)
 }
 
-// ErrorCode maps errors to Go Cloud error codes
+// ErrorCode maps errors to Go Cloud error codes.
+//
+// This method properly maps:
+// - KeeperError → uses embedded Code
+// - api.APIError → classifies via classifyAPIError
+// - Saltpack errors → classifies via classifyDecryptionError
+// - Context errors → maps to DeadlineExceeded or Canceled
+// - Unknown errors → gcerrors.Unknown
 func (k *Keeper) ErrorCode(err error) gcerrors.ErrorCode {
 	if keeperErr, ok := err.(*KeeperError); ok {
 		return keeperErr.Code
@@ -346,6 +386,37 @@ func (k *Keeper) ErrorCode(err error) gcerrors.ErrorCode {
 	
 	if apiErr, ok := err.(*api.APIError); ok {
 		return k.classifyAPIError(apiErr).Code
+	}
+	
+	// Check for Saltpack-specific errors
+	if err == saltpack.ErrNoDecryptionKey {
+		return gcerrors.NotFound
+	}
+	
+	// Check for context errors
+	if errors.Is(err, context.DeadlineExceeded) {
+		return gcerrors.DeadlineExceeded
+	}
+	if errors.Is(err, context.Canceled) {
+		return gcerrors.Canceled
+	}
+	
+	// Check for Saltpack error types indicating bad ciphertext
+	var (
+		badCiphertext saltpack.ErrBadCiphertext
+		badTag        saltpack.ErrBadTag
+		badFrame      saltpack.ErrBadFrame
+		wrongType     saltpack.ErrWrongMessageType
+		badVersion    saltpack.ErrBadVersion
+	)
+	
+	switch {
+	case errors.As(err, &badCiphertext),
+		errors.As(err, &badTag),
+		errors.As(err, &badFrame),
+		errors.As(err, &wrongType),
+		errors.As(err, &badVersion):
+		return gcerrors.InvalidArgument
 	}
 	
 	return gcerrors.Unknown
@@ -394,6 +465,113 @@ func (k *Keeper) classifyAPIError(apiErr *api.APIError) *KeeperError {
 		Message:    apiErr.Message,
 		Code:       code,
 		Underlying: apiErr,
+	}
+}
+
+// classifyDecryptionError maps decryption errors to Keeper errors with appropriate error codes.
+//
+// Error mapping (per PUL-24 requirements):
+// - saltpack.ErrNoDecryptionKey → NotFound (no matching private key in keyring)
+// - saltpack.ErrBadCiphertext → InvalidArgument (corrupted or tampered ciphertext)
+// - saltpack.ErrBadTag → InvalidArgument (authentication failure, likely tampered)
+// - saltpack.ErrBadFrame → InvalidArgument (malformed armor format)
+// - saltpack.ErrWrongMessageType → InvalidArgument (not an encryption message)
+// - saltpack.ErrBadVersion → InvalidArgument (unsupported Saltpack version)
+// - Other errors → Internal (unexpected failure)
+func (k *Keeper) classifyDecryptionError(err error) *KeeperError {
+	if err == nil {
+		return nil
+	}
+	
+	// Check for ErrNoDecryptionKey (sentinel error)
+	if err == saltpack.ErrNoDecryptionKey {
+		return &KeeperError{
+			Message: "no decryption key found: ensure your Keybase account has access to decrypt this message",
+			Code:    gcerrors.NotFound,
+			Underlying: err,
+		}
+	}
+	
+	// Check for specific Saltpack error types
+	// These are all indicators of bad/corrupted ciphertext
+	var (
+		badCiphertext saltpack.ErrBadCiphertext
+		badTag        saltpack.ErrBadTag
+		badFrame      saltpack.ErrBadFrame
+		wrongType     saltpack.ErrWrongMessageType
+		badVersion    saltpack.ErrBadVersion
+	)
+	
+	switch {
+	case errors.As(err, &badCiphertext):
+		return &KeeperError{
+			Message: fmt.Sprintf("corrupted ciphertext: authentication failed at packet %d (message may have been tampered with)", badCiphertext),
+			Code:    gcerrors.InvalidArgument,
+			Underlying: err,
+		}
+	case errors.As(err, &badTag):
+		return &KeeperError{
+			Message: fmt.Sprintf("corrupted ciphertext: bad authentication tag at packet %d", badTag),
+			Code:    gcerrors.InvalidArgument,
+			Underlying: err,
+		}
+	case errors.As(err, &badFrame):
+		return &KeeperError{
+			Message: fmt.Sprintf("malformed ciphertext: invalid armor format (%v)", err),
+			Code:    gcerrors.InvalidArgument,
+			Underlying: err,
+		}
+	case errors.As(err, &wrongType):
+		return &KeeperError{
+			Message: fmt.Sprintf("wrong message type: expected encryption message, got %v", wrongType),
+			Code:    gcerrors.InvalidArgument,
+			Underlying: err,
+		}
+	case errors.As(err, &badVersion):
+		return &KeeperError{
+			Message: fmt.Sprintf("unsupported Saltpack version: %v", err),
+			Code:    gcerrors.InvalidArgument,
+			Underlying: err,
+		}
+	default:
+		// Catch-all for unexpected errors
+		return &KeeperError{
+			Message: fmt.Sprintf("decryption failed: %v", err),
+			Code:    gcerrors.Internal,
+			Underlying: err,
+		}
+	}
+}
+
+// classifyContextError maps context errors to Keeper errors.
+//
+// Error mapping:
+// - context.DeadlineExceeded → DeadlineExceeded (timeout)
+// - context.Canceled → Canceled (operation canceled)
+func (k *Keeper) classifyContextError(err error, operation string) *KeeperError {
+	if err == nil {
+		return nil
+	}
+	
+	switch err {
+	case context.DeadlineExceeded:
+		return &KeeperError{
+			Message: fmt.Sprintf("%s timed out: operation took too long", operation),
+			Code:    gcerrors.DeadlineExceeded,
+			Underlying: err,
+		}
+	case context.Canceled:
+		return &KeeperError{
+			Message: fmt.Sprintf("%s canceled: operation was interrupted", operation),
+			Code:    gcerrors.Canceled,
+			Underlying: err,
+		}
+	default:
+		return &KeeperError{
+			Message: fmt.Sprintf("%s context error: %v", operation, err),
+			Code:    gcerrors.Internal,
+			Underlying: err,
+		}
 	}
 }
 
