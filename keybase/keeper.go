@@ -237,6 +237,59 @@ func (k *Keeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
 	return plaintext, nil
 }
 
+// DecryptWithInfo decrypts ciphertext and returns message header information
+// 
+// This method:
+// 1. Decrypts the ciphertext using the local Keybase keyring
+// 2. Parses the Saltpack message header to identify recipients
+// 3. Extracts MessageKeyInfo to determine which recipient key was used
+// 4. Returns plaintext along with message metadata
+//
+// Returns:
+//   - Plaintext bytes
+//   - MessageInfo with sender/receiver details
+//   - Error if decryption fails
+func (k *Keeper) DecryptWithInfo(ctx context.Context, ciphertext []byte) ([]byte, *crypto.MessageInfo, error) {
+	if len(ciphertext) == 0 {
+		return nil, nil, &KeeperError{
+			Message: "ciphertext cannot be empty",
+			Code:    gcerrors.InvalidArgument,
+		}
+	}
+	
+	var plaintext []byte
+	var messageKeyInfo *saltpack.MessageKeyInfo
+	var err error
+	
+	// Try to decrypt as ASCII-armored first
+	plaintext, messageKeyInfo, err = k.decryptor.DecryptArmored(string(ciphertext))
+	if err != nil {
+		// If armored decryption fails, try binary decryption
+		plaintext, messageKeyInfo, err = k.decryptor.Decrypt(ciphertext)
+		if err != nil {
+			return nil, nil, &KeeperError{
+				Message: fmt.Sprintf("decryption failed: %v", err),
+				Code: gcerrors.InvalidArgument,
+				Underlying: err,
+			}
+		}
+	}
+	
+	// Parse the message key info to extract header information
+	messageInfo, err := crypto.ParseMessageKeyInfo(messageKeyInfo)
+	if err != nil {
+		// If we can't parse the info, we still succeeded in decryption
+		// so return plaintext with a warning in the error
+		return plaintext, nil, &KeeperError{
+			Message: fmt.Sprintf("decryption succeeded but failed to parse message info: %v", err),
+			Code: gcerrors.Internal,
+			Underlying: err,
+		}
+	}
+	
+	return plaintext, messageInfo, nil
+}
+
 // Close releases resources held by the Keeper
 func (k *Keeper) Close() error {
 	if k.cacheManager != nil {

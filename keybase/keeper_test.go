@@ -539,6 +539,240 @@ func TestKeeperClose(t *testing.T) {
 	}
 }
 
+// TestKeeperDecryptWithInfo tests DecryptWithInfo method
+func TestKeeperDecryptWithInfo(t *testing.T) {
+	// Generate test key pairs
+	keyPair1, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair 1: %v", err)
+	}
+	
+	keyPair2, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair 2: %v", err)
+	}
+	
+	sender, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate sender key: %v", err)
+	}
+
+	// Create mock cache manager
+	cacheManager, err := createMockCacheManager(map[string]saltpack.BoxPublicKey{
+		"alice": keyPair1.PublicKey,
+		"bob":   keyPair2.PublicKey,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create mock cache manager: %v", err)
+	}
+	defer cacheManager.Close()
+
+	tests := []struct {
+		name       string
+		recipients []string
+		plaintext  []byte
+		decryptKey saltpack.BoxSecretKey
+		senderKey  saltpack.BoxSecretKey
+		wantAnonymous bool
+	}{
+		{
+			name:       "single recipient with sender",
+			recipients: []string{"alice"},
+			plaintext:  []byte("Hello, Alice!"),
+			decryptKey: keyPair1.SecretKey,
+			senderKey:  sender.SecretKey,
+			wantAnonymous: false,
+		},
+		{
+			name:       "single recipient anonymous sender",
+			recipients: []string{"alice"},
+			plaintext:  []byte("Anonymous message"),
+			decryptKey: keyPair1.SecretKey,
+			senderKey:  nil,
+			wantAnonymous: true,
+		},
+		{
+			name:       "multiple recipients - decrypt with first key",
+			recipients: []string{"alice", "bob"},
+			plaintext:  []byte("Hello, team!"),
+			decryptKey: keyPair1.SecretKey,
+			senderKey:  sender.SecretKey,
+			wantAnonymous: false,
+		},
+		{
+			name:       "multiple recipients - decrypt with second key",
+			recipients: []string{"alice", "bob"},
+			plaintext:  []byte("Another message"),
+			decryptKey: keyPair2.SecretKey,
+			senderKey:  sender.SecretKey,
+			wantAnonymous: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create keeper for encryption
+			config := &Config{
+				Recipients: tt.recipients,
+				Format:     FormatSaltpack,
+				CacheTTL:   24 * time.Hour,
+			}
+
+			encryptKeeper, err := NewKeeper(&KeeperConfig{
+				Config:       config,
+				CacheManager: cacheManager,
+				SenderKey:    tt.senderKey,
+			})
+			if err != nil {
+				t.Fatalf("Failed to create encrypt keeper: %v", err)
+			}
+			defer encryptKeeper.Close()
+
+			// Encrypt
+			ctx := context.Background()
+			ciphertext, err := encryptKeeper.Encrypt(ctx, tt.plaintext)
+			if err != nil {
+				t.Fatalf("Encrypt() error = %v", err)
+			}
+
+			// Create keeper for decryption with the specific key
+			keyring := crypto.NewSimpleKeyring()
+			keyring.AddKey(tt.decryptKey)
+			if tt.senderKey != nil {
+				keyring.AddPublicKey(tt.senderKey.GetPublicKey())
+			}
+
+			decryptor, err := crypto.NewDecryptor(&crypto.DecryptorConfig{
+				Keyring: keyring,
+			})
+			if err != nil {
+				t.Fatalf("Failed to create decryptor: %v", err)
+			}
+
+			decryptKeeper := &Keeper{
+				config:       config,
+				cacheManager: cacheManager,
+				decryptor:    decryptor,
+				keyring:      keyring,
+			}
+
+			// Decrypt with info
+			decrypted, messageInfo, err := decryptKeeper.DecryptWithInfo(ctx, ciphertext)
+			if err != nil {
+				t.Fatalf("DecryptWithInfo() error = %v", err)
+			}
+
+			// Verify plaintext
+			if string(decrypted) != string(tt.plaintext) {
+				t.Errorf("Decrypt() = %q, want %q", decrypted, tt.plaintext)
+			}
+			
+			// Verify message info
+			if messageInfo == nil {
+				t.Fatal("DecryptWithInfo() returned nil messageInfo")
+			}
+			
+			// Verify receiver key ID
+			if len(messageInfo.ReceiverKID) == 0 {
+				t.Error("ReceiverKID is empty")
+			}
+			
+			expectedReceiverKID := tt.decryptKey.GetPublicKey().ToKID()
+			if string(messageInfo.ReceiverKID) != string(expectedReceiverKID) {
+				t.Errorf("ReceiverKID mismatch: got %x, want %x", 
+					messageInfo.ReceiverKID, expectedReceiverKID)
+			}
+			
+			// Verify sender anonymity
+			if messageInfo.IsAnonymousSender != tt.wantAnonymous {
+				t.Errorf("IsAnonymousSender = %v, want %v", 
+					messageInfo.IsAnonymousSender, tt.wantAnonymous)
+			}
+			
+			// Verify sender key if not anonymous
+			if !tt.wantAnonymous {
+				if len(messageInfo.SenderKID) == 0 {
+					t.Error("SenderKID is empty for non-anonymous sender")
+				}
+				
+				expectedSenderKID := tt.senderKey.GetPublicKey().ToKID()
+				if string(messageInfo.SenderKID) != string(expectedSenderKID) {
+					t.Errorf("SenderKID mismatch: got %x, want %x",
+						messageInfo.SenderKID, expectedSenderKID)
+				}
+			} else {
+				if len(messageInfo.SenderKID) != 0 {
+					t.Error("SenderKID should be empty for anonymous sender")
+				}
+			}
+		})
+	}
+}
+
+// TestKeeperDecryptWithInfoErrors tests error handling in DecryptWithInfo
+func TestKeeperDecryptWithInfoErrors(t *testing.T) {
+	// Generate a test key pair
+	keyPair, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair: %v", err)
+	}
+
+	// Create a keeper with the test key
+	keyring := crypto.NewSimpleKeyring()
+	keyring.AddKey(keyPair.SecretKey)
+
+	config := &Config{
+		Recipients: []string{"alice"},
+		Format:     FormatSaltpack,
+		CacheTTL:   24 * time.Hour,
+	}
+
+	decryptor, err := crypto.NewDecryptor(&crypto.DecryptorConfig{
+		Keyring: keyring,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create decryptor: %v", err)
+	}
+
+	keeper := &Keeper{
+		config:    config,
+		decryptor: decryptor,
+		keyring:   keyring,
+	}
+
+	tests := []struct {
+		name       string
+		ciphertext []byte
+		wantErr    bool
+	}{
+		{
+			name:       "empty ciphertext",
+			ciphertext: []byte(""),
+			wantErr:    true,
+		},
+		{
+			name:       "invalid ciphertext",
+			ciphertext: []byte("not a valid ciphertext"),
+			wantErr:    true,
+		},
+		{
+			name:       "corrupted ciphertext",
+			ciphertext: []byte("BEGIN SALTPACK ENCRYPTED MESSAGE. corrupted data here"),
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, _, err := keeper.DecryptWithInfo(ctx, tt.ciphertext)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Keeper.DecryptWithInfo() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // Helper functions
 
 // createMockCacheManager creates a cache manager with pre-populated test keys
