@@ -8,6 +8,7 @@ This directory contains example programs demonstrating how to use the Keybase en
 - **`basic/`** - Basic cache operations
 - **`credentials/`** - Credential discovery examples
 - **`custom/`** - Custom configuration examples
+- **`sender_key/`** - Sender key handling and authenticated encryption ⭐ NEW
 - **`url_parsing/`** - URL scheme parsing examples
 - **`pulumi_configs/`** - Pulumi stack configuration examples
 

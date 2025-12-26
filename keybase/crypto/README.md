@@ -70,6 +70,61 @@ func main() {
 }
 ```
 
+### Using Keybase Sender Keys
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+    
+    "github.com/pulumi/pulumi-keybase-encryption/keybase/crypto"
+    "github.com/pulumi/pulumi-keybase-encryption/keybase/credentials"
+)
+
+func main() {
+    // Verify Keybase is available
+    if err := credentials.VerifyKeybaseAvailable(); err != nil {
+        log.Fatalf("Keybase is required: %v", err)
+    }
+    
+    // Load the current user's sender key from Keybase
+    senderKey, err := crypto.LoadSenderKey(nil)
+    if err != nil {
+        log.Fatalf("Failed to load sender key: %v", err)
+    }
+    
+    fmt.Printf("Loaded sender key for: %s\n", senderKey.Username)
+    
+    // Generate recipient key (in real usage, fetch from Keybase API)
+    recipient, _ := crypto.GenerateKeyPair()
+    
+    // Create encryptor with sender key
+    encryptor, _ := crypto.NewEncryptor(&crypto.EncryptorConfig{
+        SenderKey: senderKey.SecretKey,
+    })
+    
+    // Encrypt message
+    plaintext := []byte("Authenticated message from Keybase user")
+    ciphertext, _ := encryptor.Encrypt(plaintext, []saltpack.BoxPublicKey{recipient.PublicKey})
+    
+    // Create keyring and decryptor
+    keyring := crypto.NewSimpleKeyring()
+    keyring.AddKeyPair(recipient)
+    keyring.AddPublicKey(senderKey.PublicKey) // For sender verification
+    
+    decryptor, _ := crypto.NewDecryptor(&crypto.DecryptorConfig{
+        Keyring: keyring,
+    })
+    
+    // Decrypt message
+    decrypted, info, _ := decryptor.Decrypt(ciphertext)
+    fmt.Printf("Decrypted: %s\n", string(decrypted))
+    fmt.Printf("Sender verified: %v\n", info.SenderIsAnon == false)
+}
+```
+
 ### Multiple Recipients
 
 ```go
@@ -221,6 +276,68 @@ Validates a secret key.
 
 Checks if two public keys are equal.
 
+### Sender Key Management
+
+#### `LoadSenderKey(config *SenderKeyConfig) (*SenderKey, error)`
+
+Loads the sender's private key from the Keybase configuration directory.
+
+This function performs the following steps:
+1. Determines the sender identity (current Keybase user or configured username)
+2. Locates the Keybase configuration directory
+3. Loads the sender's private key from the keyring
+4. Validates the key format
+5. Returns a SenderKey struct with the loaded key
+
+**Configuration:**
+- `Username`: Sender's Keybase username (defaults to current logged-in user)
+- `ConfigDir`: Keybase configuration directory (defaults to `~/.config/keybase`)
+
+**Example:**
+
+```go
+// Load current user's sender key
+senderKey, err := crypto.LoadSenderKey(nil)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Load specific user's sender key
+senderKey, err := crypto.LoadSenderKey(&crypto.SenderKeyConfig{
+    Username: "alice",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+// Use the sender key for encryption
+encryptor, err := crypto.NewEncryptor(&crypto.EncryptorConfig{
+    SenderKey: senderKey.SecretKey,
+})
+```
+
+#### `GetSenderIdentity(username string) (string, error)`
+
+Determines the sender identity (username) to use.
+
+If username is provided, it validates that the user exists and returns it.
+Otherwise, it returns the currently logged-in Keybase user.
+
+#### `ValidateSenderKey(key *SenderKey) error`
+
+Validates that a sender key is properly formatted and usable.
+
+Checks:
+- Key is not nil
+- Username is set
+- Secret key is valid
+- Public key is valid
+- Public key matches secret key
+
+#### `CreateTestSenderKey(username string) (*SenderKey, error)`
+
+Creates a sender key for testing purposes. This generates a random key pair and should only be used in tests.
+
 ### SimpleKeyring
 
 A basic keyring implementation for storing and looking up keys.
@@ -295,15 +412,104 @@ Saltpack is a modern encryption format designed as a simpler, more secure altern
    - Recipient can verify sender (if sender's public key is known)
    - Supports anonymous senders (sender key = nil)
 
+## Sender Key Handling
+
+The sender key functionality allows you to use your Keybase identity for authenticated encryption. This is essential for Pulumi's encryption provider, as it ensures that encrypted secrets can be verified as coming from a trusted source.
+
+### How Sender Keys Work
+
+When encrypting with a sender key:
+1. The sender's private key is loaded from `~/.config/keybase/` (Linux/macOS) or `%LOCALAPPDATA%\Keybase` (Windows)
+2. The sender's key is used to sign the encrypted message
+3. Recipients can verify the message came from the specified sender
+4. This provides both confidentiality and authenticity
+
+### Loading Sender Keys
+
+```go
+// Load current user's key (automatic detection)
+senderKey, err := crypto.LoadSenderKey(nil)
+
+// Load a specific user's key
+senderKey, err := crypto.LoadSenderKey(&crypto.SenderKeyConfig{
+    Username: "alice",
+})
+
+// Load from a custom config directory
+senderKey, err := crypto.LoadSenderKey(&crypto.SenderKeyConfig{
+    Username:  "alice",
+    ConfigDir: "/custom/keybase/config",
+})
+```
+
+### Key Storage Format
+
+Keybase stores encryption keys in the configuration directory:
+- **Linux/macOS**: `~/.config/keybase/device_eks/<username>.eks`
+- **Windows**: `%LOCALAPPDATA%\Keybase\device_eks\<username>.eks`
+
+Keys are stored in JSON format with hex-encoded encryption keys:
+
+```json
+{
+  "encryption_key": "0123456789abcdef...",
+  "username": "alice"
+}
+```
+
+### Error Handling
+
+The sender key loading functions provide detailed error messages:
+
+- **Keybase not installed**: "Keybase CLI not found"
+- **No user logged in**: "no Keybase user logged in"
+- **Key not found**: "sender key not found for user 'alice'"
+- **Invalid key format**: "failed to parse key file"
+
+### Validating Sender Keys
+
+Always validate sender keys before use:
+
+```go
+senderKey, err := crypto.LoadSenderKey(nil)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Validate the key
+if err := crypto.ValidateSenderKey(senderKey); err != nil {
+    log.Fatalf("Invalid sender key: %v", err)
+}
+
+// Use the validated key
+encryptor, err := crypto.NewEncryptor(&crypto.EncryptorConfig{
+    SenderKey: senderKey.SecretKey,
+})
+```
+
+### Anonymous Encryption
+
+If you don't want to authenticate messages with a sender key, pass `nil` as the sender key:
+
+```go
+// Anonymous encryption (no sender verification)
+encryptor, err := crypto.NewEncryptor(&crypto.EncryptorConfig{
+    SenderKey: nil, // Anonymous sender
+})
+```
+
+Recipients can still decrypt the message, but cannot verify who sent it.
+
 ## Security Considerations
 
 ### Best Practices
 
 1. **Always verify sender**: Add sender's public key to keyring for verification
-2. **Protect secret keys**: Store in secure locations with appropriate permissions
+2. **Protect secret keys**: Store in secure locations with appropriate permissions (0600)
 3. **Use unique keys**: Generate separate key pairs for different purposes
 4. **Validate inputs**: Use `ValidatePublicKey()` and `ValidateSecretKey()`
 5. **Clear sensitive data**: Zero out keys in memory when done
+6. **Use sender keys for Pulumi**: Always use authenticated encryption for production secrets
 
 ### Security Properties
 

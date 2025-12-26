@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/keybase/saltpack"
+	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
 )
 
@@ -356,24 +357,11 @@ func keyToString(kid []byte) string {
 }
 
 // curve25519ScalarBaseMult computes the Curve25519 base point scalar multiplication
-// This is a simplified version - in production you'd use the proper crypto library
+// This derives the public key from a secret key using the Curve25519 elliptic curve
 func curve25519ScalarBaseMult(publicKey, secretKey *[32]byte) {
-	// Use the NaCl box public key derivation
-	// This requires the golang.org/x/crypto/curve25519 package
-	var basePoint [32]byte
-	basePoint[0] = 9
-	
-	// For simplicity, we use box.GenerateKey in production code
-	// Here we just compute it properly using the secret key
-	scalarMult(publicKey, secretKey, &basePoint)
-}
-
-// scalarMult is a placeholder for Curve25519 scalar multiplication
-// In production, use crypto/ecdh or golang.org/x/crypto/curve25519
-func scalarMult(dst, scalar, point *[32]byte) {
-	// This is a simplified implementation
-	// In production, use the proper curve25519 implementation
-	copy(dst[:], scalar[:])
+	// Use the proper curve25519 scalar base multiplication
+	// This computes publicKey = secretKey * G where G is the base point
+	curve25519.ScalarBaseMult(publicKey, secretKey)
 }
 
 // ValidatePublicKey checks if a public key is valid
@@ -408,6 +396,22 @@ func ValidateSecretKey(key saltpack.BoxSecretKey) error {
 		return fmt.Errorf("secret key is nil")
 	}
 	
+	// Check if we can export the key bytes for our implementation
+	keyBytes := ExportSecretKeyBytes(key)
+	if keyBytes != nil {
+		// Check for all-zero secret key (invalid)
+		allZero := true
+		for _, b := range keyBytes {
+			if b != 0 {
+				allZero = false
+				break
+			}
+		}
+		if allZero {
+			return fmt.Errorf("secret key cannot be all zeros")
+		}
+	}
+	
 	// Get the public key to verify the secret key is valid
 	pubKey := key.GetPublicKey()
 	if pubKey == nil {
@@ -428,4 +432,21 @@ func KeysEqual(k1, k2 saltpack.BoxPublicKey) bool {
 	kid2 := k2.ToKID()
 	
 	return bytes.Equal(kid1, kid2)
+}
+
+// ExportSecretKeyBytes exports the raw bytes of a secret key
+// This is useful for serialization and testing
+// Returns nil if the key cannot be exported
+func ExportSecretKeyBytes(key saltpack.BoxSecretKey) []byte {
+	if key == nil {
+		return nil
+	}
+	
+	// Try to cast to our implementation
+	if naclKey, ok := key.(*naclBoxSecretKey); ok {
+		return naclKey.key[:]
+	}
+	
+	// For other implementations, we can't export the key
+	return nil
 }
