@@ -12,7 +12,8 @@ import (
 )
 
 func main() {
-	fmt.Println("=== Custom Configuration Example ===\n")
+	fmt.Println("=== Custom Configuration Example ===")
+	fmt.Println()
 
 	// Get temporary directory for this example
 	tmpDir, err := os.MkdirTemp("", "keybase-cache-example-")

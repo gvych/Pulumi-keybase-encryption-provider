@@ -9,7 +9,8 @@ import (
 )
 
 func main() {
-	fmt.Println("=== Keybase Public Key Cache Example ===\n")
+	fmt.Println("=== Keybase Public Key Cache Example ===")
+	fmt.Println()
 
 	// Create cache manager with default configuration
 	manager, err := cache.NewManager(nil)
