@@ -265,7 +265,6 @@ func (k *Keeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
 	return plaintext, nil
 }
 
-<<<<<<< HEAD
 // DecryptWithInfo decrypts ciphertext and returns message header information
 // 
 // This method:
@@ -273,6 +272,8 @@ func (k *Keeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
 // 2. Parses the Saltpack message header to identify recipients
 // 3. Extracts MessageKeyInfo to determine which recipient key was used
 // 4. Returns plaintext along with message metadata
+//
+// For large messages (>10 MiB), streaming decryption is used automatically.
 //
 // Returns:
 //   - Plaintext bytes
@@ -284,6 +285,14 @@ func (k *Keeper) DecryptWithInfo(ctx context.Context, ciphertext []byte) ([]byte
 			Message: "ciphertext cannot be empty",
 			Code:    gcerrors.InvalidArgument,
 		}
+	}
+	
+	// Use streaming for large ciphertexts (>10 MiB)
+	const streamingThreshold = 10 * 1024 * 1024 // 10 MiB
+	
+	if len(ciphertext) > streamingThreshold {
+		// Use streaming decryption for large messages
+		return k.decryptStreamingWithInfo(ciphertext)
 	}
 	
 	var plaintext []byte
@@ -298,7 +307,27 @@ func (k *Keeper) DecryptWithInfo(ctx context.Context, ciphertext []byte) ([]byte
 		if err != nil {
 			return nil, nil, &KeeperError{
 				Message: fmt.Sprintf("decryption failed: %v", err),
-=======
+				Code: gcerrors.InvalidArgument,
+				Underlying: err,
+			}
+		}
+	}
+	
+	// Parse the message key info to extract header information
+	messageInfo, err := crypto.ParseMessageKeyInfo(messageKeyInfo)
+	if err != nil {
+		// If we can't parse the info, we still succeeded in decryption
+		// so return plaintext with a warning in the error
+		return plaintext, nil, &KeeperError{
+			Message: fmt.Sprintf("decryption succeeded but failed to parse message info: %v", err),
+			Code: gcerrors.Internal,
+			Underlying: err,
+		}
+	}
+	
+	return plaintext, messageInfo, nil
+}
+
 // encryptStreaming encrypts large plaintext using streaming to avoid memory issues
 func (k *Keeper) encryptStreaming(plaintext []byte, receivers []saltpack.BoxPublicKey) ([]byte, error) {
 	// Create readers and writers for streaming
@@ -335,30 +364,51 @@ func (k *Keeper) decryptStreaming(ciphertext []byte) ([]byte, error) {
 		if err != nil {
 			return nil, &KeeperError{
 				Message: fmt.Sprintf("streaming decryption failed: %v", err),
->>>>>>> origin/main
 				Code: gcerrors.InvalidArgument,
 				Underlying: err,
 			}
 		}
 	}
 	
-<<<<<<< HEAD
+	return plaintextBuf.Bytes(), nil
+}
+
+// decryptStreamingWithInfo decrypts large ciphertext using streaming and returns message info
+func (k *Keeper) decryptStreamingWithInfo(ciphertext []byte) ([]byte, *crypto.MessageInfo, error) {
+	// Create readers and writers for streaming
+	ciphertextReader := bytes.NewReader(ciphertext)
+	var plaintextBuf bytes.Buffer
+	
+	// Try armored streaming decryption first
+	messageKeyInfo, err := k.decryptor.DecryptStreamArmored(ciphertextReader, &plaintextBuf)
+	if err != nil {
+		// If armored decryption fails, try binary streaming decryption
+		ciphertextReader.Reset(ciphertext)
+		plaintextBuf.Reset()
+		
+		messageKeyInfo, err = k.decryptor.DecryptStream(ciphertextReader, &plaintextBuf)
+		if err != nil {
+			return nil, nil, &KeeperError{
+				Message: fmt.Sprintf("streaming decryption failed: %v", err),
+				Code: gcerrors.InvalidArgument,
+				Underlying: err,
+			}
+		}
+	}
+	
 	// Parse the message key info to extract header information
 	messageInfo, err := crypto.ParseMessageKeyInfo(messageKeyInfo)
 	if err != nil {
 		// If we can't parse the info, we still succeeded in decryption
 		// so return plaintext with a warning in the error
-		return plaintext, nil, &KeeperError{
+		return plaintextBuf.Bytes(), nil, &KeeperError{
 			Message: fmt.Sprintf("decryption succeeded but failed to parse message info: %v", err),
 			Code: gcerrors.Internal,
 			Underlying: err,
 		}
 	}
 	
-	return plaintext, messageInfo, nil
-=======
-	return plaintextBuf.Bytes(), nil
->>>>>>> origin/main
+	return plaintextBuf.Bytes(), messageInfo, nil
 }
 
 // Close releases resources held by the Keeper
