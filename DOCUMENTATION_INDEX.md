@@ -23,7 +23,13 @@ This project includes comprehensive documentation covering setup, configuration,
    - Multi-environment setup
    - Migration from other providers
 
-3. **[Example Configurations](examples/pulumi_configs/)** - Real-world examples
+3. **[Key Rotation Guide](keybase/KEY_ROTATION.md)** - Key rotation and migration ⭐
+   - Detection of retired keys
+   - Lazy re-encryption workflows
+   - Bulk migration tools
+   - Security best practices
+
+4. **[Example Configurations](examples/pulumi_configs/)** - Real-world examples
    - Single user setup
    - Team configurations
    - Development/Staging/Production
@@ -37,6 +43,7 @@ This project includes comprehensive documentation covering setup, configuration,
 |----------|-------------|----------|
 | **[Quick Start Guide](QUICKSTART.md)** | Get up and running in 5 minutes | All users |
 | **[Pulumi Configuration](PULUMI_CONFIGURATION.md)** | Complete Pulumi setup guide | DevOps, Infrastructure Engineers |
+| **[Key Rotation Guide](keybase/KEY_ROTATION.md)** | Key rotation and lazy re-encryption | Security Engineers, DevOps |
 | **[Environment Variables](ENVIRONMENT_VARIABLES.md)** | Environment configuration reference | CI/CD, Automation Engineers |
 | **[URL Scheme](keybase/URL_PARSING.md)** | URL format specification | Advanced users, Developers |
 

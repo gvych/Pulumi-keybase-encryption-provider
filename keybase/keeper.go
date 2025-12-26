@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/keybase/saltpack"
 	"github.com/pulumi/pulumi-keybase-encryption/keybase/api"
@@ -465,4 +466,217 @@ func loadLocalSecretKey(keyring *crypto.SimpleKeyring) error {
 	keyring.AddKey(senderKey.SecretKey)
 	
 	return nil
+}
+
+// ReEncrypt performs lazy re-encryption with current keys
+//
+// This method is called when key rotation is detected and the data needs to be
+// re-encrypted with the current keys. It's "lazy" because it only happens when
+// explicitly invoked, not automatically during every decryption.
+//
+// WHEN TO USE:
+// - After detecting key rotation via DetectRotation()
+// - During a planned key migration
+// - When a recipient's key is compromised and rotated
+// - As part of a regular key hygiene process
+//
+// WORKFLOW:
+// 1. Decrypt old ciphertext
+// 2. Detect key rotation
+// 3. Call ReEncrypt with the plaintext and new recipients
+// 4. Store the new ciphertext
+//
+// Parameters:
+//   - ctx: Context for API calls
+//   - request: The re-encryption request containing plaintext and new recipients
+//
+// Returns:
+//   - ReEncryptionResult with the new ciphertext
+//   - Error if re-encryption fails
+func (k *Keeper) ReEncrypt(ctx context.Context, request *ReEncryptionRequest) (*ReEncryptionResult, error) {
+	if request == nil {
+		return nil, fmt.Errorf("re-encryption request cannot be nil")
+	}
+	
+	if len(request.Plaintext) == 0 {
+		return nil, fmt.Errorf("plaintext cannot be empty")
+	}
+	
+	// Determine recipients to use
+	recipients := request.NewRecipients
+	if len(recipients) == 0 {
+		// Use currently configured recipients
+		recipients = k.config.Recipients
+	}
+	
+	if len(recipients) == 0 {
+		return nil, fmt.Errorf("no recipients specified for re-encryption")
+	}
+	
+	// Encrypt with new keys
+	// This will fetch the current public keys for all recipients
+	ciphertext, err := k.Encrypt(ctx, request.Plaintext)
+	if err != nil {
+		return nil, fmt.Errorf("re-encryption failed: %w", err)
+	}
+	
+	return &ReEncryptionResult{
+		Ciphertext:           ciphertext,
+		Recipients:           recipients,
+		ReEncryptedAt:        time.Now(),
+		PreviousRotationInfo: request.RotationInfo,
+	}, nil
+}
+
+// DecryptAndDetectRotation decrypts ciphertext and checks for key rotation
+//
+// This is a convenience method that combines decryption with rotation detection.
+// Use this when you want to monitor for key rotation during normal operations.
+//
+// Returns:
+//   - Plaintext
+//   - MessageKeyInfo from decryption
+//   - KeyRotationInfo (nil if no rotation detected)
+//   - Error if decryption fails
+func (k *Keeper) DecryptAndDetectRotation(ctx context.Context, ciphertext []byte) (
+	[]byte, *saltpack.MessageKeyInfo, *KeyRotationInfo, error,
+) {
+	// First, decrypt the message
+	plaintext, err := k.Decrypt(ctx, ciphertext)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decryption failed: %w", err)
+	}
+	
+	// Get the message key info from the last decryption
+	// We need to decrypt again to get the MessageKeyInfo
+	// (The current Decrypt method doesn't return it)
+	var messageInfo *saltpack.MessageKeyInfo
+	
+	// Use the decryptor directly to get MessageKeyInfo
+	if len(ciphertext) > 0 {
+		// Try armored decryption first
+		_, info, err := k.decryptor.DecryptArmored(string(ciphertext))
+		if err != nil {
+			// Try binary decryption
+			_, info, err = k.decryptor.Decrypt(ciphertext)
+			if err != nil {
+				return plaintext, nil, nil, fmt.Errorf("failed to get message info: %w", err)
+			}
+			messageInfo = info
+		} else {
+			messageInfo = info
+		}
+	}
+	
+	// Detect rotation
+	detector := NewKeyRotationDetector(k.cacheManager)
+	rotationInfo, err := detector.DetectRotation(ctx, messageInfo, k.config.Recipients)
+	if err != nil {
+		// Don't fail on rotation detection errors - return the plaintext anyway
+		// The caller can decide what to do with the error
+		return plaintext, messageInfo, nil, fmt.Errorf("rotation detection failed: %w", err)
+	}
+	
+	// Only return rotation info if rotation was actually detected
+	if !rotationInfo.NeedsReEncryption {
+		rotationInfo = nil
+	}
+	
+	return plaintext, messageInfo, rotationInfo, nil
+}
+
+// PerformLazyReEncryption is a high-level method that performs the complete
+// decrypt-detect-reencrypt workflow
+//
+// This method:
+// 1. Decrypts the old ciphertext
+// 2. Detects if key rotation occurred
+// 3. If rotation detected, re-encrypts with current keys
+// 4. Returns both the plaintext and new ciphertext (if re-encrypted)
+//
+// USE CASES:
+// - Automated key rotation workflows
+// - Background jobs that migrate encrypted data
+// - API endpoints that handle encrypted data
+//
+// IMPORTANT: This method always returns the plaintext, but only returns new
+// ciphertext if rotation was detected. Check if NewCiphertext is non-nil to
+// determine if you need to update the stored ciphertext.
+//
+// Returns:
+//   - Plaintext (always)
+//   - ReEncryptionResult (nil if no rotation detected)
+//   - Error if operation fails
+func (k *Keeper) PerformLazyReEncryption(ctx context.Context, oldCiphertext []byte) (
+	[]byte, *ReEncryptionResult, error,
+) {
+	// Step 1: Decrypt and detect rotation
+	plaintext, _, rotationInfo, err := k.DecryptAndDetectRotation(ctx, oldCiphertext)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decrypt and detect failed: %w", err)
+	}
+	
+	// Step 2: Check if re-encryption is needed
+	if rotationInfo == nil || !rotationInfo.NeedsReEncryption {
+		// No rotation detected - return plaintext with no new ciphertext
+		return plaintext, nil, nil
+	}
+	
+	// Step 3: Re-encrypt with current keys
+	result, err := k.ReEncrypt(ctx, &ReEncryptionRequest{
+		Plaintext:    plaintext,
+		NewRecipients: nil, // Use current recipients
+		RotationInfo: rotationInfo,
+	})
+	if err != nil {
+		return plaintext, nil, fmt.Errorf("re-encryption failed: %w", err)
+	}
+	
+	return plaintext, result, nil
+}
+
+// MigrateEncryptedData handles bulk migration of encrypted data after key rotation
+//
+// This method is designed for batch operations where you need to migrate multiple
+// encrypted values after a key rotation event. It processes each ciphertext and
+// returns results indicating which ones needed re-encryption.
+//
+// USE CASES:
+// - Pulumi state file migration
+// - Bulk secret rotation
+// - Key compromise recovery
+//
+// Parameters:
+//   - ctx: Context for API calls
+//   - ciphertexts: Map of identifiers to encrypted data
+//
+// Returns:
+//   - Map of identifiers to migration results
+func (k *Keeper) MigrateEncryptedData(
+	ctx context.Context,
+	ciphertexts map[string][]byte,
+) map[string]*MigrationResult {
+	results := make(map[string]*MigrationResult)
+	
+	for id, ciphertext := range ciphertexts {
+		// Perform lazy re-encryption for each ciphertext
+		plaintext, reencResult, err := k.PerformLazyReEncryption(ctx, ciphertext)
+		
+		result := &MigrationResult{
+			Plaintext: plaintext,
+		}
+		
+		if err != nil {
+			result.Error = err
+		} else if reencResult != nil {
+			// Rotation was detected and re-encryption performed
+			result.NewCiphertext = reencResult.Ciphertext
+			result.RotationDetected = true
+			result.RotationInfo = reencResult.PreviousRotationInfo
+		}
+		
+		results[id] = result
+	}
+	
+	return results
 }
