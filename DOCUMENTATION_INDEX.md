@@ -63,6 +63,7 @@ This project includes comprehensive documentation covering setup, configuration,
 |----------|-------------|---------|
 | **[URL Scheme](keybase/URL_PARSING.md)** | URL format spec | Parsing, validation, examples |
 | **[Armoring Strategy](ARMORING_STRATEGY.md)** | Encryption format decision | ASCII vs binary, Base62 encoding |
+| **[Offline Decryption](OFFLINE_DECRYPTION.md)** | Offline mode and air-gapped environments | Cache management, network independence ⭐ |
 
 ## 📂 Documentation by Topic
 
@@ -95,6 +96,7 @@ This project includes comprehensive documentation covering setup, configuration,
 
 #### Key Management
 - [Public Key Caching](README.md#public-key-caching)
+- [Offline Decryption](OFFLINE_DECRYPTION.md) ⭐
 - [Cache Configuration](keybase/cache/README.md)
 - [Cache TTL Settings](ENVIRONMENT_VARIABLES.md#keybase_cache_ttl)
 
@@ -324,6 +326,7 @@ Found an issue or have a suggestion?
 ├── PULUMI_CONFIGURATION.md            # Complete Pulumi setup
 ├── ENVIRONMENT_VARIABLES.md           # Environment variable reference
 ├── ARMORING_STRATEGY.md               # Encryption format decision
+├── OFFLINE_DECRYPTION.md              # Offline mode guide
 │
 ├── keybase/
 │   ├── URL_PARSING.md                 # URL scheme specification

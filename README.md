@@ -29,6 +29,7 @@ config:
 ### Technical Documentation
 - **[URL Scheme Specification](keybase/URL_PARSING.md)** - URL format and parsing details
 - **[Armoring Strategy](ARMORING_STRATEGY.md)** - Encryption format decision (ASCII vs binary)
+- **[Offline Decryption](OFFLINE_DECRYPTION.md)** - Offline mode and air-gapped environments ⭐
 - **[Cache Manager API](keybase/cache/README.md)** - Public key caching implementation
 - **[API Client](keybase/api/README.md)** - Keybase API integration
 - **[Credentials](keybase/credentials/README.md)** - Credential discovery
@@ -59,6 +60,16 @@ Phase 1 implements the foundational public key caching infrastructure and creden
 - **Automatic Cache Management**: Cache invalidation, pruning, and refresh capabilities
 - **Thread-Safe**: Concurrent access support with mutex protection
 - **Persistent Storage**: Cache survives application restarts
+- **Offline Mode**: Optional offline-only operation using cached keys
+
+#### Offline Decryption 🌐➜📴
+- **Offline Decryption**: Always works without network (uses local keyring only)
+- **Offline Encryption**: Works with cached public keys (no network required)
+- **Air-Gapped Support**: Full operation in isolated environments after initial setup
+- **Network Resilience**: Continue working during network outages
+- **Performance**: 100-200x faster encryption with cached keys
+
+See **[OFFLINE_DECRYPTION.md](OFFLINE_DECRYPTION.md)** for complete documentation.
 
 ### Architecture
 
