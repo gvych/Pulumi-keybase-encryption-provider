@@ -1,479 +1,705 @@
 package crypto
 
 import (
-	"strings"
+	"bytes"
+	"encoding/hex"
 	"testing"
-
-	"github.com/keybase/saltpack"
 )
 
-// Test valid KID extraction
-func TestExtractKeyFromKID_Valid(t *testing.T) {
-	// Valid test KID (0120 + 64 hex chars)
-	testKID := "0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	
-	key, err := extractKeyFromKID(testKID)
+// TestGenerateKeyPair tests key pair generation
+func TestGenerateKeyPair(t *testing.T) {
+	kp, err := GenerateKeyPair()
 	if err != nil {
-		t.Fatalf("extractKeyFromKID() failed: %v", err)
+		t.Fatalf("GenerateKeyPair() error = %v", err)
 	}
 	
-	// Verify the key bytes match
-	expectedHex := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	actualHex := PublicKeyToHex(key)
+	if kp == nil {
+		t.Fatal("GenerateKeyPair() returned nil")
+	}
 	
-	if actualHex != expectedHex {
-		t.Errorf("Key mismatch: expected %s, got %s", expectedHex, actualHex)
+	if kp.PublicKey == nil {
+		t.Error("GenerateKeyPair() returned nil PublicKey")
+	}
+	
+	if kp.SecretKey == nil {
+		t.Error("GenerateKeyPair() returned nil SecretKey")
+	}
+	
+	if len(kp.Identifier) != 32 {
+		t.Errorf("GenerateKeyPair() identifier length = %d, want 32", len(kp.Identifier))
+	}
+	
+	// Verify public key from secret key matches
+	derivedPublicKey := kp.SecretKey.GetPublicKey()
+	if !KeysEqual(derivedPublicKey, kp.PublicKey) {
+		t.Error("Public key derived from secret key doesn't match stored public key")
 	}
 }
 
-// Test KID with wrong length
-func TestExtractKeyFromKID_InvalidLength(t *testing.T) {
-	testCases := []struct {
-		name string
-		kid  string
-	}{
-		{"too short", "0120abc"},
-		{"too long", "0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345678extra"},
-		{"empty", ""},
-		{"only prefix", "0120"},
-	}
-	
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := extractKeyFromKID(tc.kid)
-			if err == nil {
-				t.Errorf("Expected error for KID %q, got nil", tc.kid)
-			}
-		})
-	}
-}
-
-// Test KID with wrong prefix
-func TestExtractKeyFromKID_InvalidPrefix(t *testing.T) {
-	// Wrong prefix (should be 0120, not 0121)
-	testKID := "0121abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	
-	_, err := extractKeyFromKID(testKID)
-	if err == nil {
-		t.Error("Expected error for wrong prefix, got nil")
-	}
-	
-	if !strings.Contains(err.Error(), "invalid KID prefix") {
-		t.Errorf("Expected 'invalid KID prefix' error, got: %v", err)
-	}
-}
-
-// Test KID with invalid hex
-func TestExtractKeyFromKID_InvalidHex(t *testing.T) {
-	// Contains non-hex characters (g, h, z)
-	testKID := "0120ghijkl0123456789abcdef0123456789abcdef0123456789abcdef0123456789z"
-	
-	_, err := extractKeyFromKID(testKID)
-	if err == nil {
-		t.Error("Expected error for invalid hex, got nil")
-	}
-}
-
-// Test parseHexKey with valid input
-func TestParseHexKey_Valid(t *testing.T) {
-	testHex := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	
-	key, err := parseHexKey(testHex)
-	if err != nil {
-		t.Fatalf("parseHexKey() failed: %v", err)
-	}
-	
-	actualHex := PublicKeyToHex(key)
-	if actualHex != testHex {
-		t.Errorf("Key mismatch: expected %s, got %s", testHex, actualHex)
-	}
-}
-
-// Test parseHexKey with invalid length
-func TestParseHexKey_InvalidLength(t *testing.T) {
-	testCases := []struct {
-		name   string
-		hexKey string
-	}{
-		{"too short", "abcdef"},
-		{"too long", "abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567extra"},
-		{"empty", ""},
-	}
-	
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseHexKey(tc.hexKey)
-			if err == nil {
-				t.Errorf("Expected error for hex key %q, got nil", tc.hexKey)
-			}
-		})
-	}
-}
-
-// Test PGPToBoxPublicKey with valid KID
-func TestPGPToBoxPublicKey_ValidKID(t *testing.T) {
-	testKID := "0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	
-	key, err := PGPToBoxPublicKey("", testKID)
-	if err != nil {
-		t.Fatalf("PGPToBoxPublicKey() failed: %v", err)
-	}
-	
-	// Verify key is not all zeros
-	err = ValidatePublicKey(key)
-	if err != nil {
-		t.Error("Key is all zeros")
-	}
-}
-
-// Test PGPToBoxPublicKey with hex string
-func TestPGPToBoxPublicKey_HexString(t *testing.T) {
-	testHex := "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-	
-	key, err := PGPToBoxPublicKey(testHex, "")
-	if err != nil {
-		t.Fatalf("PGPToBoxPublicKey() failed: %v", err)
-	}
-	
-	actualHex := PublicKeyToHex(key)
-	if actualHex != testHex {
-		t.Errorf("Key mismatch: expected %s, got %s", testHex, actualHex)
-	}
-}
-
-// Test PGPToBoxPublicKey with 32-byte binary
-func TestPGPToBoxPublicKey_Binary(t *testing.T) {
-	// Create a 32-byte test key
-	testBytes := make([]byte, 32)
-	for i := range testBytes {
-		testBytes[i] = byte(i)
-	}
-	
-	key, err := PGPToBoxPublicKey(string(testBytes), "")
-	if err != nil {
-		t.Fatalf("PGPToBoxPublicKey() failed: %v", err)
-	}
-	
-	// Verify the key matches by converting back to bytes
-	keyBytes := key.ToKID()
-	for i := range keyBytes {
-		if keyBytes[i] != testBytes[i] {
-			t.Errorf("Key byte %d mismatch: expected %d, got %d", i, testBytes[i], keyBytes[i])
-		}
-	}
-}
-
-// Test PGPToBoxPublicKey with PGP bundle (should fail with helpful message)
-func TestPGPToBoxPublicKey_PGPBundle(t *testing.T) {
-	pgpBundle := `-----BEGIN PGP PUBLIC KEY BLOCK-----
-Version: GnuPG v1
-
-mQENBFsomedata...
------END PGP PUBLIC KEY BLOCK-----`
-	
-	_, err := PGPToBoxPublicKey(pgpBundle, "")
-	if err == nil {
-		t.Error("Expected error for PGP bundle, got nil")
-	}
-	
-	// Should mention using KID instead
-	if !strings.Contains(err.Error(), "KID") {
-		t.Errorf("Error should mention KID, got: %v", err)
-	}
-}
-
-// Test PGPToBoxPublicKey with unsupported format
-func TestPGPToBoxPublicKey_UnsupportedFormat(t *testing.T) {
-	testCases := []struct {
+// TestCreatePublicKey tests creating a public key from bytes
+func TestCreatePublicKey(t *testing.T) {
+	tests := []struct {
 		name    string
-		keyData string
-		kid     string
+		keyBytes []byte
+		wantErr bool
 	}{
-		{"random text", "this is not a key", ""},
-		{"wrong length binary", "too short", ""},
-		{"empty both", "", ""},
+		{
+			name:    "valid 32 bytes",
+			keyBytes: make([]byte, 32),
+			wantErr: false,
+		},
+		{
+			name:    "too short",
+			keyBytes: make([]byte, 16),
+			wantErr: true,
+		},
+		{
+			name:    "too long",
+			keyBytes: make([]byte, 64),
+			wantErr: true,
+		},
+		{
+			name:    "empty",
+			keyBytes: []byte{},
+			wantErr: true,
+		},
 	}
-	
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := PGPToBoxPublicKey(tc.keyData, tc.kid)
-			if err == nil {
-				t.Errorf("Expected error for unsupported format, got nil")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Fill with test data
+			for i := range tt.keyBytes {
+				tt.keyBytes[i] = byte(i)
+			}
+			
+			key, err := CreatePublicKey(tt.keyBytes)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CreatePublicKey() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			
+			if !tt.wantErr {
+				if key == nil {
+					t.Error("CreatePublicKey() returned nil key")
+					return
+				}
+				
+				kid := key.ToKID()
+				if !bytes.Equal(kid, tt.keyBytes) {
+					t.Error("CreatePublicKey() key ID doesn't match input bytes")
+				}
 			}
 		})
 	}
 }
 
-// Test ValidatePublicKey with valid key
-func TestValidatePublicKey_Valid(t *testing.T) {
-	// Create a non-zero key
-	var rawKey saltpack.RawBoxKey
-	for i := range rawKey {
-		rawKey[i] = byte(i + 1)
+// TestCreatePublicKeyFromHex tests creating a public key from hex string
+func TestCreatePublicKeyFromHex(t *testing.T) {
+	// Generate a valid 32-byte key
+	validKeyBytes := make([]byte, 32)
+	for i := range validKeyBytes {
+		validKeyBytes[i] = byte(i)
 	}
-	key := NewBoxPublicKey(rawKey)
+	validHex := hex.EncodeToString(validKeyBytes)
 	
-	err := ValidatePublicKey(key)
-	if err != nil {
-		t.Errorf("ValidatePublicKey() failed for valid key: %v", err)
-	}
-}
-
-// Test ValidatePublicKey with all-zero key
-func TestValidatePublicKey_AllZeros(t *testing.T) {
-	var rawKey saltpack.RawBoxKey // All zeros by default
-	key := NewBoxPublicKey(rawKey)
-	
-	err := ValidatePublicKey(key)
-	if err == nil {
-		t.Error("Expected error for all-zero key, got nil")
-	}
-	
-	if !strings.Contains(err.Error(), "all zeros") {
-		t.Errorf("Expected 'all zeros' error, got: %v", err)
-	}
-}
-
-// Test FormatKeyID
-func TestFormatKeyID(t *testing.T) {
-	// Create a test key
-	testHex := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	key, _ := parseHexKey(testHex)
-	
-	kid := FormatKeyID(key)
-	
-	expectedKID := "0120" + testHex
-	if kid != expectedKID {
-		t.Errorf("FormatKeyID() = %s, want %s", kid, expectedKID)
-	}
-}
-
-// Test PublicKeyToHex
-func TestPublicKeyToHex(t *testing.T) {
-	testHex := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	key, _ := parseHexKey(testHex)
-	
-	actualHex := PublicKeyToHex(key)
-	
-	if actualHex != testHex {
-		t.Errorf("PublicKeyToHex() = %s, want %s", actualHex, testHex)
-	}
-}
-
-// Test ConvertPublicKeys with valid input
-func TestConvertPublicKeys_Valid(t *testing.T) {
-	users := []UserPublicKey{
+	tests := []struct {
+		name    string
+		hexKey  string
+		wantErr bool
+	}{
 		{
-			Username:  "alice",
-			KeyID:     "0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-			PublicKey: "",
+			name:    "valid hex",
+			hexKey:  validHex,
+			wantErr: false,
 		},
 		{
-			Username:  "bob",
-			KeyID:     "01201234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-			PublicKey: "",
-		},
-	}
-	
-	results, err := ConvertPublicKeys(users)
-	if err != nil {
-		t.Fatalf("ConvertPublicKeys() failed: %v", err)
-	}
-	
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results, got %d", len(results))
-	}
-	
-	// Verify usernames
-	if results[0].Username != "alice" {
-		t.Errorf("Expected username 'alice', got %s", results[0].Username)
-	}
-	if results[1].Username != "bob" {
-		t.Errorf("Expected username 'bob', got %s", results[1].Username)
-	}
-}
-
-// Test ConvertPublicKeys with empty input
-func TestConvertPublicKeys_Empty(t *testing.T) {
-	_, err := ConvertPublicKeys([]UserPublicKey{})
-	if err == nil {
-		t.Error("Expected error for empty input, got nil")
-	}
-}
-
-// Test ConvertPublicKeys with invalid key
-func TestConvertPublicKeys_InvalidKey(t *testing.T) {
-	users := []UserPublicKey{
-		{
-			Username:  "alice",
-			KeyID:     "0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-			PublicKey: "",
+			name:    "invalid hex characters",
+			hexKey:  "zzzzzz",
+			wantErr: true,
 		},
 		{
-			Username:  "bob",
-			KeyID:     "invalid-kid",
-			PublicKey: "",
+			name:    "wrong length",
+			hexKey:  "0123456789",
+			wantErr: true,
 		},
-	}
-	
-	results, err := ConvertPublicKeys(users)
-	
-	// Should get an error
-	if err == nil {
-		t.Error("Expected error for invalid key, got nil")
-	}
-	
-	// Should still return valid results for alice
-	if len(results) != 1 {
-		t.Errorf("Expected 1 valid result, got %d", len(results))
-	}
-	
-	if len(results) > 0 && results[0].Username != "alice" {
-		t.Errorf("Expected valid result for 'alice', got %s", results[0].Username)
-	}
-}
-
-// Test ConvertPublicKeys with all-zero key
-func TestConvertPublicKeys_AllZeroKey(t *testing.T) {
-	// All zeros = invalid key
-	users := []UserPublicKey{
 		{
-			Username:  "alice",
-			KeyID:     "01200000000000000000000000000000000000000000000000000000000000000000",
-			PublicKey: "",
+			name:    "empty",
+			hexKey:  "",
+			wantErr: true,
 		},
 	}
-	
-	results, err := ConvertPublicKeys(users)
-	
-	// Should get an error
-	if err == nil {
-		t.Error("Expected error for all-zero key, got nil")
-	}
-	
-	// Should have no valid results
-	if len(results) != 0 {
-		t.Errorf("Expected 0 valid results, got %d", len(results))
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := CreatePublicKeyFromHex(tt.hexKey)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CreatePublicKeyFromHex() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			
+			if !tt.wantErr && key == nil {
+				t.Error("CreatePublicKeyFromHex() returned nil key")
+			}
+		})
 	}
 }
 
-// Test round-trip: KID -> Key -> KID
-func TestRoundTrip_KIDToKeyToKID(t *testing.T) {
-	originalKID := "0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	
-	// KID -> Key
-	key, err := extractKeyFromKID(originalKID)
-	if err != nil {
-		t.Fatalf("extractKeyFromKID() failed: %v", err)
+// TestCreateSecretKey tests creating a secret key from bytes
+func TestCreateSecretKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		keyBytes []byte
+		wantErr bool
+	}{
+		{
+			name:    "valid 32 bytes",
+			keyBytes: make([]byte, 32),
+			wantErr: false,
+		},
+		{
+			name:    "too short",
+			keyBytes: make([]byte, 16),
+			wantErr: true,
+		},
+		{
+			name:    "too long",
+			keyBytes: make([]byte, 64),
+			wantErr: true,
+		},
 	}
-	
-	// Key -> KID
-	reconstructedKID := FormatKeyID(key)
-	
-	if reconstructedKID != originalKID {
-		t.Errorf("Round-trip failed: original %s, reconstructed %s", originalKID, reconstructedKID)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Fill with test data
+			for i := range tt.keyBytes {
+				tt.keyBytes[i] = byte(i + 1) // Avoid all zeros
+			}
+			
+			key, err := CreateSecretKey(tt.keyBytes)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CreateSecretKey() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			
+			if !tt.wantErr {
+				if key == nil {
+					t.Error("CreateSecretKey() returned nil key")
+					return
+				}
+				
+				// Verify we can get public key
+				pubKey := key.GetPublicKey()
+				if pubKey == nil {
+					t.Error("CreateSecretKey() GetPublicKey() returned nil")
+				}
+			}
+		})
 	}
 }
 
-// Test KID with whitespace (should be trimmed)
-func TestExtractKeyFromKID_Whitespace(t *testing.T) {
-	testKID := "  0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789  "
-	
-	key, err := extractKeyFromKID(testKID)
-	if err != nil {
-		t.Fatalf("extractKeyFromKID() failed with whitespace: %v", err)
+// TestCreateSecretKeyFromHex tests creating a secret key from hex string
+func TestCreateSecretKeyFromHex(t *testing.T) {
+	// Generate a valid 32-byte key
+	validKeyBytes := make([]byte, 32)
+	for i := range validKeyBytes {
+		validKeyBytes[i] = byte(i + 1)
 	}
+	validHex := hex.EncodeToString(validKeyBytes)
 	
-	// Verify the key is valid
-	err = ValidatePublicKey(key)
-	if err != nil {
-		t.Errorf("Key validation failed: %v", err)
+	tests := []struct {
+		name    string
+		hexKey  string
+		wantErr bool
+	}{
+		{
+			name:    "valid hex",
+			hexKey:  validHex,
+			wantErr: false,
+		},
+		{
+			name:    "invalid hex",
+			hexKey:  "invalid",
+			wantErr: true,
+		},
+		{
+			name:    "wrong length",
+			hexKey:  "0123",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := CreateSecretKeyFromHex(tt.hexKey)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CreateSecretKeyFromHex() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			
+			if !tt.wantErr && key == nil {
+				t.Error("CreateSecretKeyFromHex() returned nil key")
+			}
+		})
 	}
 }
 
-// Test hex key with whitespace (should be trimmed)
-func TestParseHexKey_Whitespace(t *testing.T) {
-	testHex := "  abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789  "
-	
-	key, err := parseHexKey(testHex)
-	if err != nil {
-		t.Fatalf("parseHexKey() failed with whitespace: %v", err)
+// TestSimpleKeyring tests the SimpleKeyring implementation
+func TestSimpleKeyring(t *testing.T) {
+	keyring := NewSimpleKeyring()
+	if keyring == nil {
+		t.Fatal("NewSimpleKeyring() returned nil")
 	}
 	
-	expectedHex := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	actualHex := PublicKeyToHex(key)
+	// Generate test key pairs
+	kp1, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair 1: %v", err)
+	}
 	
-	if actualHex != expectedHex {
-		t.Errorf("Key mismatch: expected %s, got %s", expectedHex, actualHex)
+	kp2, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair 2: %v", err)
+	}
+	
+	// Add keys
+	keyring.AddKey(kp1.SecretKey)
+	keyring.AddKeyPair(kp2)
+	
+	// Lookup by key ID
+	kid1 := kp1.PublicKey.ToKID()
+	kid2 := kp2.PublicKey.ToKID()
+	
+	t.Run("lookup existing key", func(t *testing.T) {
+		index, key := keyring.LookupBoxSecretKey([][]byte{kid1})
+		if index != 0 {
+			t.Errorf("LookupBoxSecretKey() index = %d, want 0", index)
+		}
+		if key == nil {
+			t.Error("LookupBoxSecretKey() returned nil key")
+		}
+	})
+	
+	t.Run("lookup multiple keys", func(t *testing.T) {
+		index, key := keyring.LookupBoxSecretKey([][]byte{kid1, kid2})
+		if index < 0 || index > 1 {
+			t.Errorf("LookupBoxSecretKey() index = %d, want 0 or 1", index)
+		}
+		if key == nil {
+			t.Error("LookupBoxSecretKey() returned nil key")
+		}
+	})
+	
+	t.Run("lookup non-existent key", func(t *testing.T) {
+		fakeKID := make([]byte, 32)
+		index, key := keyring.LookupBoxSecretKey([][]byte{fakeKID})
+		if index != -1 {
+			t.Errorf("LookupBoxSecretKey() index = %d, want -1", index)
+		}
+		if key != nil {
+			t.Error("LookupBoxSecretKey() should return nil for non-existent key")
+		}
+	})
+	
+	t.Run("lookup public key", func(t *testing.T) {
+		pubKey := keyring.LookupBoxPublicKey(kid1)
+		if pubKey == nil {
+			t.Error("LookupBoxPublicKey() returned nil")
+		}
+		if !KeysEqual(pubKey, kp1.PublicKey) {
+			t.Error("LookupBoxPublicKey() returned wrong key")
+		}
+	})
+	
+	t.Run("get all secret keys", func(t *testing.T) {
+		secKeys := keyring.GetAllBoxSecretKeys()
+		if len(secKeys) != 2 {
+			t.Errorf("GetAllBoxSecretKeys() returned %d keys, want 2", len(secKeys))
+		}
+	})
+	
+	t.Run("import secret key", func(t *testing.T) {
+		rawKey := make([]byte, 32)
+		for i := range rawKey {
+			rawKey[i] = byte(i + 1)
+		}
+		
+		importedKey := keyring.ImportBoxSecretKey(rawKey)
+		if importedKey == nil {
+			t.Error("ImportBoxSecretKey() returned nil")
+		}
+	})
+	
+	t.Run("import invalid key", func(t *testing.T) {
+		invalidKey := make([]byte, 16) // Too short
+		importedKey := keyring.ImportBoxSecretKey(invalidKey)
+		if importedKey != nil {
+			t.Error("ImportBoxSecretKey() should return nil for invalid key")
+		}
+	})
+}
+
+// TestValidatePublicKey tests public key validation
+func TestValidatePublicKey(t *testing.T) {
+	validKey, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+	
+	tests := []struct {
+		name    string
+		key     BoxPublicKey
+		wantErr bool
+	}{
+		{
+			name:    "valid key",
+			key:     validKey.PublicKey,
+			wantErr: false,
+		},
+		{
+			name:    "nil key",
+			key:     nil,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePublicKey(tt.key)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidatePublicKey() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+	
+	t.Run("all zeros key", func(t *testing.T) {
+		zeroKey, _ := CreatePublicKey(make([]byte, 32))
+		err := ValidatePublicKey(zeroKey)
+		if err == nil {
+			t.Error("ValidatePublicKey() should reject all-zero key")
+		}
+	})
+}
+
+// TestValidateSecretKey tests secret key validation
+func TestValidateSecretKey(t *testing.T) {
+	validKey, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+	
+	tests := []struct {
+		name    string
+		key     BoxSecretKey
+		wantErr bool
+	}{
+		{
+			name:    "valid key",
+			key:     validKey.SecretKey,
+			wantErr: false,
+		},
+		{
+			name:    "nil key",
+			key:     nil,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateSecretKey(tt.key)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateSecretKey() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+	
+	t.Run("all zeros key", func(t *testing.T) {
+		zeroKey, _ := CreateSecretKey(make([]byte, 32))
+		err := ValidateSecretKey(zeroKey)
+		if err == nil {
+			t.Error("ValidateSecretKey() should reject all-zero key")
+		}
+	})
+}
+
+// TestKeysEqual tests key equality checking
+func TestKeysEqual(t *testing.T) {
+	key1, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key1: %v", err)
+	}
+	
+	key2, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key2: %v", err)
+	}
+	
+	tests := []struct {
+		name  string
+		key1  BoxPublicKey
+		key2  BoxPublicKey
+		want  bool
+	}{
+		{
+			name: "same key",
+			key1: key1.PublicKey,
+			key2: key1.PublicKey,
+			want: true,
+		},
+		{
+			name: "different keys",
+			key1: key1.PublicKey,
+			key2: key2.PublicKey,
+			want: false,
+		},
+		{
+			name: "both nil",
+			key1: nil,
+			key2: nil,
+			want: true,
+		},
+		{
+			name: "first nil",
+			key1: nil,
+			key2: key1.PublicKey,
+			want: false,
+		},
+		{
+			name: "second nil",
+			key1: key1.PublicKey,
+			key2: nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := KeysEqual(tt.key1, tt.key2); got != tt.want {
+				t.Errorf("KeysEqual() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
-// Test PGPToBoxPublicKey prioritizes KID over keyData
-func TestPGPToBoxPublicKey_KIDPriority(t *testing.T) {
-	validKID := "0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	invalidKeyData := "this is invalid"
-	
-	// Should succeed because KID is tried first
-	key, err := PGPToBoxPublicKey(invalidKeyData, validKID)
-	if err != nil {
-		t.Fatalf("PGPToBoxPublicKey() should prioritize KID: %v", err)
+// TestParseKeybasePublicKey tests parsing Keybase public keys
+func TestParseKeybasePublicKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		keyBundle string
+		wantErr   bool
+	}{
+		{
+			name:      "PGP key bundle",
+			keyBundle: "-----BEGIN PGP PUBLIC KEY BLOCK-----\ntest\n-----END PGP PUBLIC KEY BLOCK-----",
+			wantErr:   true, // PGP conversion not yet implemented
+		},
+		{
+			name:      "raw hex key (valid length)",
+			keyBundle: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			wantErr:   false,
+		},
+		{
+			name:      "invalid format",
+			keyBundle: "not a valid key",
+			wantErr:   true,
+		},
+		{
+			name:      "empty",
+			keyBundle: "",
+			wantErr:   true,
+		},
 	}
-	
-	// Verify the key comes from the KID
-	expectedHex := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	actualHex := PublicKeyToHex(key)
-	
-	if actualHex != expectedHex {
-		t.Errorf("Key should come from KID: expected %s, got %s", expectedHex, actualHex)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseKeybasePublicKey(tt.keyBundle)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseKeybasePublicKey() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 
-// Benchmark key conversion
-func BenchmarkExtractKeyFromKID(b *testing.B) {
-	testKID := "0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+// TestParseKeybaseKeyID tests parsing Keybase key IDs
+func TestParseKeybaseKeyID(t *testing.T) {
+	tests := []struct {
+		name    string
+		kid     string
+		wantErr bool
+		wantLen int
+	}{
+		{
+			name:    "valid hex with prefix",
+			kid:     "0x0123456789abcdef",
+			wantErr: false,
+			wantLen: 8,
+		},
+		{
+			name:    "valid hex without prefix",
+			kid:     "0123456789abcdef",
+			wantErr: false,
+			wantLen: 8,
+		},
+		{
+			name:    "invalid hex",
+			kid:     "zzzz",
+			wantErr: true,
+		},
+		{
+			name:    "empty",
+			kid:     "",
+			wantErr: false,
+			wantLen: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyID, err := ParseKeybaseKeyID(tt.kid)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseKeybaseKeyID() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && len(keyID) != tt.wantLen {
+				t.Errorf("ParseKeybaseKeyID() returned key ID of length %d, want %d", 
+					len(keyID), tt.wantLen)
+			}
+		})
+	}
+}
+
+// TestPrecompute tests key precomputation
+func TestPrecompute(t *testing.T) {
+	kp1, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair 1: %v", err)
+	}
+	
+	kp2, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair 2: %v", err)
+	}
+	
+	// Precompute shared key
+	sharedKey := kp1.SecretKey.Precompute(kp2.PublicKey)
+	if sharedKey == nil {
+		t.Fatal("Precompute() returned nil")
+	}
+	
+	// Test encryption with precomputed key
+	var nonce [24]byte
+	message := []byte("test message")
+	
+	encrypted := sharedKey.Box(nonce, message)
+	if len(encrypted) == 0 {
+		t.Error("Box() returned empty ciphertext")
+	}
+	
+	// Decrypt with the other side's precomputed key
+	sharedKey2 := kp2.SecretKey.Precompute(kp1.PublicKey)
+	decrypted, err := sharedKey2.Unbox(nonce, encrypted)
+	if err != nil {
+		t.Errorf("Unbox() error = %v", err)
+	}
+	
+	if !bytes.Equal(decrypted, message) {
+		t.Errorf("Decrypted message doesn't match.\nGot:  %s\nWant: %s", 
+			string(decrypted), string(message))
+	}
+}
+
+// TestCreateEphemeralKey tests ephemeral key creation
+func TestCreateEphemeralKey(t *testing.T) {
+	kp, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair: %v", err)
+	}
+	
+	ephemeralKey, err := kp.PublicKey.CreateEphemeralKey()
+	if err != nil {
+		t.Fatalf("CreateEphemeralKey() error = %v", err)
+	}
+	
+	if ephemeralKey == nil {
+		t.Fatal("CreateEphemeralKey() returned nil")
+	}
+	
+	// Verify we can get public key from ephemeral key
+	ephemeralPubKey := ephemeralKey.GetPublicKey()
+	if ephemeralPubKey == nil {
+		t.Error("Ephemeral key has no public key")
+	}
+	
+	// Ephemeral key should be different from original
+	if KeysEqual(ephemeralPubKey, kp.PublicKey) {
+		t.Error("Ephemeral key should be different from original key")
+	}
+}
+
+// TestNaclBoxPublicKeyMethods tests all methods of naclBoxPublicKey
+func TestNaclBoxPublicKeyMethods(t *testing.T) {
+	kp, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair: %v", err)
+	}
+	
+	pubKey := kp.PublicKey
+	
+	t.Run("ToKID", func(t *testing.T) {
+		kid := pubKey.ToKID()
+		if len(kid) != 32 {
+			t.Errorf("ToKID() returned %d bytes, want 32", len(kid))
+		}
+	})
+	
+	t.Run("ToRawBoxKeyPointer", func(t *testing.T) {
+		rawKey := pubKey.ToRawBoxKeyPointer()
+		if rawKey == nil {
+			t.Error("ToRawBoxKeyPointer() returned nil")
+		}
+	})
+	
+	t.Run("HideIdentity", func(t *testing.T) {
+		if pubKey.HideIdentity() {
+			t.Error("HideIdentity() should return false")
+		}
+	})
+}
+
+// TestNaclBoxSecretKeyMethods tests all methods of naclBoxSecretKey
+func TestNaclBoxSecretKeyMethods(t *testing.T) {
+	kp, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate key pair: %v", err)
+	}
+	
+	secretKey := kp.SecretKey
+	
+	t.Run("GetPublicKey", func(t *testing.T) {
+		pubKey := secretKey.GetPublicKey()
+		if pubKey == nil {
+			t.Error("GetPublicKey() returned nil")
+		}
+		if !KeysEqual(pubKey, kp.PublicKey) {
+			t.Error("GetPublicKey() returned different key")
+		}
+	})
+}
+
+// BenchmarkGenerateKeyPair benchmarks key pair generation
+func BenchmarkGenerateKeyPair(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, _ = GenerateKeyPair()
+	}
+}
+
+// BenchmarkPrecompute benchmarks key precomputation
+func BenchmarkPrecompute(b *testing.B) {
+	kp1, _ := GenerateKeyPair()
+	kp2, _ := GenerateKeyPair()
 	
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := extractKeyFromKID(testKID)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkPGPToBoxPublicKey(b *testing.B) {
-	testKID := "0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := PGPToBoxPublicKey("", testKID)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkConvertPublicKeys(b *testing.B) {
-	users := []UserPublicKey{
-		{
-			Username: "alice",
-			KeyID:    "0120abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-		},
-		{
-			Username: "bob",
-			KeyID:    "01201234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-		},
-		{
-			Username: "charlie",
-			KeyID:    "0120fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-		},
-	}
-	
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := ConvertPublicKeys(users)
-		if err != nil {
-			b.Fatal(err)
-		}
+		_ = kp1.SecretKey.Precompute(kp2.PublicKey)
 	}
 }
