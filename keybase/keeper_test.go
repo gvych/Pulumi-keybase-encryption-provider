@@ -2,6 +2,7 @@ package keybase
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -517,6 +518,193 @@ func TestKeeperErrorAs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDecryptionErrorMapping tests the classification of decryption errors
+func TestDecryptionErrorMapping(t *testing.T) {
+	keeper := &Keeper{
+		config: DefaultConfig(),
+	}
+
+	tests := []struct {
+		name     string
+		err      error
+		wantCode gcerrors.ErrorCode
+		wantMsg  string // substring to check in error message
+	}{
+		{
+			name:     "ErrNoDecryptionKey",
+			err:      saltpack.ErrNoDecryptionKey,
+			wantCode: gcerrors.NotFound,
+			wantMsg:  "no decryption key found",
+		},
+		{
+			name:     "ErrBadCiphertext",
+			err:      saltpack.ErrBadCiphertext(5),
+			wantCode: gcerrors.InvalidArgument,
+			wantMsg:  "corrupted ciphertext",
+		},
+		{
+			name:     "ErrBadTag",
+			err:      saltpack.ErrBadTag(3),
+			wantCode: gcerrors.InvalidArgument,
+			wantMsg:  "bad authentication tag",
+		},
+		{
+			name: "ErrWrongMessageType",
+			err: saltpack.ErrWrongMessageType{
+				Wanted:   saltpack.MessageTypeEncryption,
+				Received: saltpack.MessageTypeAttachedSignature,
+			},
+			wantCode: gcerrors.InvalidArgument,
+			wantMsg:  "wrong message type",
+		},
+		{
+			name:     "ErrBadVersion",
+			err:      saltpack.CheckKnownMajorVersion(saltpack.Version{Major: 99, Minor: 0}),
+			wantCode: gcerrors.InvalidArgument,
+			wantMsg:  "unsupported Saltpack version",
+		},
+		{
+			name:     "context.DeadlineExceeded",
+			err:      context.DeadlineExceeded,
+			wantCode: gcerrors.DeadlineExceeded,
+			wantMsg:  "",
+		},
+		{
+			name:     "context.Canceled",
+			err:      context.Canceled,
+			wantCode: gcerrors.Canceled,
+			wantMsg:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test ErrorCode
+			code := keeper.ErrorCode(tt.err)
+			if code != tt.wantCode {
+				t.Errorf("ErrorCode() = %v, want %v", code, tt.wantCode)
+			}
+
+			// Test classifyDecryptionError for non-context errors
+			if tt.err != context.DeadlineExceeded && tt.err != context.Canceled {
+				keeperErr := keeper.classifyDecryptionError(tt.err)
+				if keeperErr == nil {
+					t.Fatal("classifyDecryptionError() returned nil")
+				}
+				if keeperErr.Code != tt.wantCode {
+					t.Errorf("classifyDecryptionError().Code = %v, want %v", keeperErr.Code, tt.wantCode)
+				}
+				if tt.wantMsg != "" && !containsSubstring(keeperErr.Message, tt.wantMsg) {
+					t.Errorf("classifyDecryptionError().Message = %q, want substring %q", keeperErr.Message, tt.wantMsg)
+				}
+				if keeperErr.Underlying != tt.err {
+					t.Errorf("classifyDecryptionError().Underlying = %v, want %v", keeperErr.Underlying, tt.err)
+				}
+			}
+		})
+	}
+}
+
+// TestClassifyContextError tests context error classification
+func TestClassifyContextError(t *testing.T) {
+	keeper := &Keeper{
+		config: DefaultConfig(),
+	}
+
+	tests := []struct {
+		name      string
+		err       error
+		operation string
+		wantCode  gcerrors.ErrorCode
+		wantMsg   string
+	}{
+		{
+			name:      "deadline exceeded",
+			err:       context.DeadlineExceeded,
+			operation: "decryption",
+			wantCode:  gcerrors.DeadlineExceeded,
+			wantMsg:   "timed out",
+		},
+		{
+			name:      "canceled",
+			err:       context.Canceled,
+			operation: "decryption",
+			wantCode:  gcerrors.Canceled,
+			wantMsg:   "canceled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keeperErr := keeper.classifyContextError(tt.err, tt.operation)
+			if keeperErr == nil {
+				t.Fatal("classifyContextError() returned nil")
+			}
+			if keeperErr.Code != tt.wantCode {
+				t.Errorf("classifyContextError().Code = %v, want %v", keeperErr.Code, tt.wantCode)
+			}
+			if !containsSubstring(keeperErr.Message, tt.wantMsg) {
+				t.Errorf("classifyContextError().Message = %q, want substring %q", keeperErr.Message, tt.wantMsg)
+			}
+			if keeperErr.Underlying != tt.err {
+				t.Errorf("classifyContextError().Underlying = %v, want %v", keeperErr.Underlying, tt.err)
+			}
+		})
+	}
+}
+
+// TestErrorAsWithSaltpackErrors tests ErrorAs with Saltpack errors wrapped in KeeperError
+func TestErrorAsWithSaltpackErrors(t *testing.T) {
+	keeper := &Keeper{
+		config: DefaultConfig(),
+	}
+
+	// Create a KeeperError wrapping a Saltpack error
+	saltpackErr := saltpack.ErrBadCiphertext(1)
+	keeperErr := &KeeperError{
+		Message:    "test error",
+		Code:       gcerrors.InvalidArgument,
+		Underlying: saltpackErr,
+	}
+
+	// Test that we can extract the underlying Saltpack error
+	var extractedErr saltpack.ErrBadCiphertext
+	if !keeper.ErrorAs(keeperErr, &extractedErr) {
+		t.Error("ErrorAs() failed to extract ErrBadCiphertext from KeeperError")
+	}
+	if extractedErr != saltpackErr {
+		t.Errorf("ErrorAs() extracted %v, want %v", extractedErr, saltpackErr)
+	}
+
+	// Test with ErrNoDecryptionKey
+	keeperErr2 := &KeeperError{
+		Message:    "test error",
+		Code:       gcerrors.NotFound,
+		Underlying: saltpack.ErrNoDecryptionKey,
+	}
+
+	// For sentinel errors, we check using errors.Is pattern
+	if !errors.Is(keeperErr2.Underlying, saltpack.ErrNoDecryptionKey) {
+		t.Error("Underlying error is not ErrNoDecryptionKey")
+	}
+}
+
+// containsSubstring checks if s contains substr (case-insensitive helper)
+func containsSubstring(s, substr string) bool {
+	return len(substr) == 0 || len(s) >= len(substr) && 
+		(s == substr || len(s) > 0 && len(substr) > 0 && 
+		stringContains(s, substr))
+}
+
+func stringContains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 // TestKeeperClose tests the Close method
