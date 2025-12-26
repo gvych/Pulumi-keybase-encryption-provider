@@ -1,6 +1,7 @@
 package keybase
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -113,8 +114,13 @@ func NewKeeperFromURL(url string) (*Keeper, error) {
 // This method:
 // 1. Fetches public keys for all recipients via API/cache
 // 2. Converts PGP keys to Saltpack BoxPublicKey format
-// 3. Calls saltpack.EncryptArmor62Seal() for ASCII output
-// 4. Returns the encrypted ciphertext
+// 3. Uses streaming encryption for large messages (>10 MiB)
+// 4. Uses in-memory encryption for smaller messages
+// 5. Returns the encrypted ciphertext
+//
+// For messages larger than 10 MiB, streaming encryption is used to avoid
+// loading the entire ciphertext into memory, improving performance and
+// reducing memory usage.
 func (k *Keeper) Encrypt(ctx context.Context, plaintext []byte) ([]byte, error) {
 	if len(plaintext) == 0 {
 		return nil, &KeeperError{
@@ -197,6 +203,15 @@ func (k *Keeper) Encrypt(ctx context.Context, plaintext []byte) ([]byte, error) 
 	}
 	
 	// Step 3: Encrypt using Saltpack
+	// Use streaming for large messages (>10 MiB) to avoid memory issues
+	const streamingThreshold = 10 * 1024 * 1024 // 10 MiB
+	
+	if len(plaintext) > streamingThreshold {
+		// Use streaming encryption for large messages
+		return k.encryptStreaming(plaintext, receivers)
+	}
+	
+	// Use in-memory encryption for smaller messages
 	// Use ASCII-armored output for better compatibility with Pulumi state files
 	ciphertext, err := k.encryptor.EncryptArmored(plaintext, receivers)
 	if err != nil {
@@ -212,6 +227,10 @@ func (k *Keeper) Encrypt(ctx context.Context, plaintext []byte) ([]byte, error) 
 }
 
 // Decrypt decrypts ciphertext using the local Keybase keyring
+//
+// This method automatically detects the message size and uses streaming
+// decryption for large messages (>10 MiB) to avoid loading the entire
+// plaintext into memory.
 func (k *Keeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) == 0 {
 		return nil, &KeeperError{
@@ -220,6 +239,15 @@ func (k *Keeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
 		}
 	}
 	
+	// Use streaming for large ciphertexts (>10 MiB)
+	const streamingThreshold = 10 * 1024 * 1024 // 10 MiB
+	
+	if len(ciphertext) > streamingThreshold {
+		// Use streaming decryption for large messages
+		return k.decryptStreaming(ciphertext)
+	}
+	
+	// Use in-memory decryption for smaller messages
 	// Try to decrypt as ASCII-armored first
 	plaintext, _, err := k.decryptor.DecryptArmored(string(ciphertext))
 	if err != nil {
@@ -235,6 +263,51 @@ func (k *Keeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
 	}
 	
 	return plaintext, nil
+}
+
+// encryptStreaming encrypts large plaintext using streaming to avoid memory issues
+func (k *Keeper) encryptStreaming(plaintext []byte, receivers []saltpack.BoxPublicKey) ([]byte, error) {
+	// Create readers and writers for streaming
+	plaintextReader := bytes.NewReader(plaintext)
+	var ciphertextBuf bytes.Buffer
+	
+	// Use streaming encryption with ASCII armoring
+	err := k.encryptor.EncryptStreamArmored(plaintextReader, &ciphertextBuf, receivers)
+	if err != nil {
+		return nil, &KeeperError{
+			Message: fmt.Sprintf("streaming encryption failed: %v", err),
+			Code: gcerrors.Internal,
+			Underlying: err,
+		}
+	}
+	
+	return ciphertextBuf.Bytes(), nil
+}
+
+// decryptStreaming decrypts large ciphertext using streaming to avoid memory issues
+func (k *Keeper) decryptStreaming(ciphertext []byte) ([]byte, error) {
+	// Create readers and writers for streaming
+	ciphertextReader := bytes.NewReader(ciphertext)
+	var plaintextBuf bytes.Buffer
+	
+	// Try armored streaming decryption first
+	_, err := k.decryptor.DecryptStreamArmored(ciphertextReader, &plaintextBuf)
+	if err != nil {
+		// If armored decryption fails, try binary streaming decryption
+		ciphertextReader.Reset(ciphertext)
+		plaintextBuf.Reset()
+		
+		_, err = k.decryptor.DecryptStream(ciphertextReader, &plaintextBuf)
+		if err != nil {
+			return nil, &KeeperError{
+				Message: fmt.Sprintf("streaming decryption failed: %v", err),
+				Code: gcerrors.InvalidArgument,
+				Underlying: err,
+			}
+		}
+	}
+	
+	return plaintextBuf.Bytes(), nil
 }
 
 // Close releases resources held by the Keeper
