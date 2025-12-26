@@ -418,3 +418,138 @@ func TestCacheEntryIsExpired(t *testing.T) {
 		})
 	}
 }
+
+func TestNewCacheWithInvalidDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	
+	// Create a file where we'll try to create a directory
+	invalidPath := filepath.Join(tmpDir, "file.txt")
+	err := os.WriteFile(invalidPath, []byte("test"), 0600)
+	if err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+	
+	// Try to create cache in a path that requires a directory where a file exists
+	config := &CacheConfig{
+		FilePath: filepath.Join(invalidPath, "subdir", "cache.json"),
+		TTL:      1 * time.Hour,
+	}
+	
+	_, err = NewCache(config)
+	if err == nil {
+		t.Error("NewCache() should fail when directory path contains a file")
+	}
+}
+
+func TestLoadCorruptedCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	cacheFile := filepath.Join(tmpDir, "corrupted_cache.json")
+	
+	// Write corrupted JSON
+	err := os.WriteFile(cacheFile, []byte("invalid json {{{"), 0600)
+	if err != nil {
+		t.Fatalf("Failed to write corrupted cache file: %v", err)
+	}
+	
+	config := &CacheConfig{
+		FilePath: cacheFile,
+		TTL:      1 * time.Hour,
+	}
+	
+	_, err = NewCache(config)
+	if err == nil {
+		t.Error("NewCache() should fail with corrupted cache file")
+	}
+}
+
+func TestLoadEmptyCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	cacheFile := filepath.Join(tmpDir, "empty_cache.json")
+	
+	// Write empty JSON object
+	err := os.WriteFile(cacheFile, []byte(`{"entries":null}`), 0600)
+	if err != nil {
+		t.Fatalf("Failed to write empty cache file: %v", err)
+	}
+	
+	config := &CacheConfig{
+		FilePath: cacheFile,
+		TTL:      1 * time.Hour,
+	}
+	
+	cache, err := NewCache(config)
+	if err != nil {
+		t.Fatalf("NewCache() failed with empty cache: %v", err)
+	}
+	
+	stats := cache.Stats()
+	if stats.TotalEntries != 0 {
+		t.Errorf("TotalEntries = %v, want 0", stats.TotalEntries)
+	}
+}
+
+func TestSaveErrorHandling(t *testing.T) {
+	tmpDir := t.TempDir()
+	cacheFile := filepath.Join(tmpDir, "test_cache.json")
+	
+	config := &CacheConfig{
+		FilePath: cacheFile,
+		TTL:      1 * time.Hour,
+	}
+	
+	cache, err := NewCache(config)
+	if err != nil {
+		t.Fatalf("NewCache() error = %v", err)
+	}
+	
+	// Add an entry
+	err = cache.Set("test", "key", "id")
+	if err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	
+	// Make directory read-only to cause save error
+	err = os.Chmod(tmpDir, 0500)
+	if err != nil {
+		t.Fatalf("Failed to change directory permissions: %v", err)
+	}
+	
+	// Restore permissions after test
+	defer os.Chmod(tmpDir, 0700)
+	
+	// Try to set another entry (should fail to save)
+	err = cache.Set("another", "key2", "id2")
+	if err == nil {
+		t.Error("Set() should fail when cache file cannot be written")
+	}
+}
+
+func TestPruneExpiredNoModification(t *testing.T) {
+	tmpDir := t.TempDir()
+	config := &CacheConfig{
+		FilePath: filepath.Join(tmpDir, "test_cache.json"),
+		TTL:      1 * time.Hour,
+	}
+	
+	cache, err := NewCache(config)
+	if err != nil {
+		t.Fatalf("NewCache() error = %v", err)
+	}
+	
+	// Add entries that won't expire
+	err = cache.Set("alice", "key1", "id1")
+	if err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	
+	// Prune when nothing is expired (should not modify)
+	err = cache.PruneExpired()
+	if err != nil {
+		t.Fatalf("PruneExpired() error = %v", err)
+	}
+	
+	stats := cache.Stats()
+	if stats.ValidEntries != 1 {
+		t.Errorf("ValidEntries = %v, want 1", stats.ValidEntries)
+	}
+}

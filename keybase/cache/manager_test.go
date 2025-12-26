@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -505,5 +506,190 @@ func TestManagerClose(t *testing.T) {
 	err = manager.Close()
 	if err != nil {
 		t.Errorf("Close() error = %v", err)
+	}
+}
+
+func TestManagerCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	config := &ManagerConfig{
+		CacheConfig: &CacheConfig{
+			FilePath: filepath.Join(tmpDir, "test_cache.json"),
+			TTL:      1 * time.Hour,
+		},
+		APIConfig: api.DefaultClientConfig(),
+	}
+	
+	manager, err := NewManager(config)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	
+	// Test that Cache() returns the underlying cache
+	cache := manager.Cache()
+	if cache == nil {
+		t.Error("Cache() returned nil")
+	}
+	
+	// Verify we can use the cache directly
+	err = cache.Set("test", "key", "id")
+	if err != nil {
+		t.Errorf("cache.Set() error = %v", err)
+	}
+	
+	entry := cache.Get("test")
+	if entry == nil {
+		t.Error("cache.Get() returned nil after Set()")
+	}
+}
+
+func TestRefreshUsers(t *testing.T) {
+	// Create mock server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := api.LookupResponse{
+			Status: api.Status{
+				Code: 0,
+				Name: "OK",
+			},
+			Them: []api.User{
+				{
+					Basics: api.Basics{
+						Username: "alice",
+					},
+					PublicKeys: api.PublicKeys{
+						Primary: api.PrimaryKey{
+							KID:    "new_kid_alice",
+							Bundle: "new_bundle_alice",
+						},
+					},
+				},
+				{
+					Basics: api.Basics{
+						Username: "bob",
+					},
+					PublicKeys: api.PublicKeys{
+						Primary: api.PrimaryKey{
+							KID:    "new_kid_bob",
+							Bundle: "new_bundle_bob",
+						},
+					},
+				},
+			},
+		}
+		
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+	
+	tmpDir := t.TempDir()
+	config := &ManagerConfig{
+		CacheConfig: &CacheConfig{
+			FilePath: filepath.Join(tmpDir, "test_cache.json"),
+			TTL:      1 * time.Hour,
+		},
+		APIConfig: &api.ClientConfig{
+			BaseURL:    server.URL,
+			Timeout:    5 * time.Second,
+			MaxRetries: 0,
+		},
+	}
+	
+	manager, err := NewManager(config)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	
+	// Pre-populate cache with old keys
+	err = manager.cache.Set("alice", "old_bundle_alice", "old_kid_alice")
+	if err != nil {
+		t.Fatalf("cache.Set() error = %v", err)
+	}
+	err = manager.cache.Set("bob", "old_bundle_bob", "old_kid_bob")
+	if err != nil {
+		t.Fatalf("cache.Set() error = %v", err)
+	}
+	
+	// Refresh multiple users
+	keys, err := manager.RefreshUsers(context.Background(), []string{"alice", "bob"})
+	if err != nil {
+		t.Fatalf("RefreshUsers() error = %v", err)
+	}
+	
+	if len(keys) != 2 {
+		t.Fatalf("RefreshUsers() returned %d keys, want 2", len(keys))
+	}
+	
+	// Should have new keys
+	if keys[0].PublicKey != "new_bundle_alice" {
+		t.Errorf("keys[0].PublicKey = %v, want new_bundle_alice", keys[0].PublicKey)
+	}
+	
+	if keys[1].PublicKey != "new_bundle_bob" {
+		t.Errorf("keys[1].PublicKey = %v, want new_bundle_bob", keys[1].PublicKey)
+	}
+}
+
+func TestNewManagerWithNilConfig(t *testing.T) {
+	manager, err := NewManager(nil)
+	if err != nil {
+		t.Fatalf("NewManager(nil) error = %v", err)
+	}
+	
+	if manager == nil {
+		t.Error("NewManager(nil) returned nil manager")
+	}
+	
+	// Verify it uses default configs
+	if manager.cache == nil {
+		t.Error("Manager cache is nil")
+	}
+	
+	if manager.apiClient == nil {
+		t.Error("Manager apiClient is nil")
+	}
+}
+
+func TestNewManagerWithCacheError(t *testing.T) {
+	tmpDir := t.TempDir()
+	
+	// Create a file where we'll try to create a directory
+	invalidPath := filepath.Join(tmpDir, "file.txt")
+	err := os.WriteFile(invalidPath, []byte("test"), 0600)
+	if err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+	
+	config := &ManagerConfig{
+		CacheConfig: &CacheConfig{
+			FilePath: filepath.Join(invalidPath, "subdir", "cache.json"),
+			TTL:      1 * time.Hour,
+		},
+		APIConfig: api.DefaultClientConfig(),
+	}
+	
+	_, err = NewManager(config)
+	if err == nil {
+		t.Error("NewManager() should fail with invalid cache config")
+	}
+}
+
+func TestGetPublicKeysEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	config := &ManagerConfig{
+		CacheConfig: &CacheConfig{
+			FilePath: filepath.Join(tmpDir, "test_cache.json"),
+			TTL:      1 * time.Hour,
+		},
+		APIConfig: api.DefaultClientConfig(),
+	}
+	
+	manager, err := NewManager(config)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	
+	_, err = manager.GetPublicKeys(context.Background(), []string{})
+	if err == nil {
+		t.Error("GetPublicKeys() should fail with empty usernames")
 	}
 }
